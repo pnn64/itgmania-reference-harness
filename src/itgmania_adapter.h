@@ -25,6 +25,11 @@ struct ChartMetrics {
     std::string bpms;
     double duration_seconds = 0.0;
     std::string streams_breakdown;
+    std::string streams_breakdown_level1;
+    std::string streams_breakdown_level2;
+    std::string streams_breakdown_level3;
+    int total_stream_measures = 0;
+    int total_break_measures = 0;
     int total_steps = 0;
     std::vector<int> notes_per_measure;
     std::vector<double> nps_per_measure;

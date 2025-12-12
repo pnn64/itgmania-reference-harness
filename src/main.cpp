@@ -26,6 +26,11 @@ static void emit_json_stub(
     std::cout << "  \"hash\": \"\",\n";
     std::cout << "  \"duration_seconds\": null,\n";
     std::cout << "  \"streams_breakdown\": \"\",\n";
+    std::cout << "  \"streams_breakdown_level1\": \"\",\n";
+    std::cout << "  \"streams_breakdown_level2\": \"\",\n";
+    std::cout << "  \"streams_breakdown_level3\": \"\",\n";
+    std::cout << "  \"total_stream_measures\": null,\n";
+    std::cout << "  \"total_break_measures\": null,\n";
     std::cout << "  \"total_steps\": null,\n";
     std::cout << "  \"notes_per_measure\": [],\n";
     std::cout << "  \"nps_per_measure\": [],\n";
@@ -57,6 +62,11 @@ static void emit_chart_json(const ChartMetrics& m, const std::string& indent) {
     std::cout << ind2 << "\"hash\": \"" << m.hash << "\",\n";
     std::cout << ind2 << "\"duration_seconds\": " << m.duration_seconds << ",\n";
     std::cout << ind2 << "\"streams_breakdown\": \"" << m.streams_breakdown << "\",\n";
+    std::cout << ind2 << "\"streams_breakdown_level1\": \"" << m.streams_breakdown_level1 << "\",\n";
+    std::cout << ind2 << "\"streams_breakdown_level2\": \"" << m.streams_breakdown_level2 << "\",\n";
+    std::cout << ind2 << "\"streams_breakdown_level3\": \"" << m.streams_breakdown_level3 << "\",\n";
+    std::cout << ind2 << "\"total_stream_measures\": " << m.total_stream_measures << ",\n";
+    std::cout << ind2 << "\"total_break_measures\": " << m.total_break_measures << ",\n";
     std::cout << ind2 << "\"total_steps\": " << m.total_steps << ",\n";
     std::cout << ind2 << "\"notes_per_measure\": [";
     for (size_t i = 0; i < m.notes_per_measure.size(); ++i) {

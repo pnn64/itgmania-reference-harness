@@ -334,6 +334,9 @@ static std::string compute_hash_with_lua(const std::string& simfile_path,
                                          const std::string& description,
                                          TimingData* timing,
                                          std::string* breakdown_text,
+                                         std::vector<std::string>* breakdown_levels,
+                                         int* stream_measures,
+                                         int* break_measures,
                                          std::vector<int>* lua_notes_per_measure,
                                          std::vector<double>* lua_nps_per_measure,
                                          std::vector<bool>* lua_equally_spaced,
@@ -467,18 +470,33 @@ static std::string compute_hash_with_lua(const std::string& simfile_path,
         *lua_peak_nps = lua_tonumber(L, -1);
         lua_pop(L, 1);
     }
-    if (breakdown_text) {
+    auto call_breakdown = [&](int level, std::string& out) {
         lua_getglobal(L, "GenerateBreakdownText");
         lua_pushstring(L, "P1");
-        lua_pushinteger(L, 0); // minimization level 0 for detailed breakdown
+        lua_pushinteger(L, level);
         if (lua_pcall(L, 2, 1, 0) != 0) {
             std::fprintf(stderr, "lua breakdown error: %s\n", lua_tostring(L, -1));
             lua_pop(L, 1);
-        } else if (lua_isstring(L, -1)) {
-            *breakdown_text = lua_tostring(L, -1);
+            return;
+        }
+        if (lua_isstring(L, -1)) out = lua_tostring(L, -1);
+        lua_pop(L, 1);
+    };
+    if (breakdown_text) call_breakdown(0, *breakdown_text);
+    if (breakdown_levels) {
+        breakdown_levels->resize(4);
+        for (int i = 0; i < 4; ++i) call_breakdown(i, (*breakdown_levels)[i]);
+    }
+    if (stream_measures && break_measures) {
+        lua_getglobal(L, "GetTotalStreamAndBreakMeasures");
+        lua_pushstring(L, "P1");
+        if (lua_pcall(L, 1, 2, 0) != 0) {
+            std::fprintf(stderr, "lua stream totals error: %s\n", lua_tostring(L, -1));
             lua_pop(L, 1);
         } else {
-            lua_pop(L, 1);
+            *stream_measures = static_cast<int>(lua_tointeger(L, -2));
+            *break_measures = static_cast<int>(lua_tointeger(L, -1));
+            lua_pop(L, 2);
         }
     }
 
@@ -514,8 +532,11 @@ static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Ste
     std::vector<double> lua_nps_pm;
     std::vector<bool> lua_equally_spaced;
     double lua_peak_nps = 0.0;
+    std::vector<std::string> breakdown_levels;
+    int stream_measures = 0;
+    int break_measures = 0;
     out.hash = compute_hash_with_lua(simfile_path, st_str, diff_str, steps->GetDescription(), steps->GetTimingData(),
-                                     &out.streams_breakdown,
+                                     &out.streams_breakdown, &breakdown_levels, &stream_measures, &break_measures,
                                      &lua_notes_pm, &lua_nps_pm, &lua_equally_spaced, &lua_peak_nps);
     out.steps_type = st_str;
     out.difficulty = diff_str;
@@ -548,6 +569,13 @@ static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Ste
         out.peak_nps = 0.0;
         for (double v : out.nps_per_measure) out.peak_nps = std::max(out.peak_nps, v);
     }
+    if (breakdown_levels.size() == 4) {
+        out.streams_breakdown_level1 = breakdown_levels[1];
+        out.streams_breakdown_level2 = breakdown_levels[2];
+        out.streams_breakdown_level3 = breakdown_levels[3];
+    }
+    out.total_stream_measures = stream_measures;
+    out.total_break_measures = break_measures;
     out.notes_per_measure = std::move(notes_per_measure);
     out.nps_per_measure = std::move(nps_per_measure);
     out.jumps = jumps;
