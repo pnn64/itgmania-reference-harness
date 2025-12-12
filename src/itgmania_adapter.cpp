@@ -135,6 +135,34 @@ static std::string bpm_string_from_timing(TimingData* td) {
     return join(",", bpmStrings);
 }
 
+static std::vector<std::vector<double>> timing_segments_to_number_table(TimingData* td, TimingSegmentType tst) {
+    const std::vector<TimingSegment*>& segs = td->GetTimingSegments(tst);
+    std::vector<std::vector<double>> out;
+    out.reserve(segs.size());
+    for (TimingSegment* seg : segs) {
+        std::vector<float> values = seg->GetValues();
+        std::vector<double> row;
+        row.reserve(values.size() + 1);
+        row.push_back(static_cast<double>(seg->GetBeat()));
+        for (float v : values) row.push_back(static_cast<double>(v));
+        out.push_back(std::move(row));
+    }
+    return out;
+}
+
+static std::vector<TimingLabelOut> timing_labels_to_table(TimingData* td) {
+    const std::vector<TimingSegment*>& segs = td->GetTimingSegments(SEGMENT_LABEL);
+    std::vector<TimingLabelOut> out;
+    out.reserve(segs.size());
+    for (TimingSegment* seg : segs) {
+        TimingLabelOut row;
+        row.beat = static_cast<double>(seg->GetBeat());
+        row.label = ToLabel(seg)->GetLabel();
+        out.push_back(std::move(row));
+    }
+    return out;
+}
+
 static std::string format_bpm_like_simply_love(double bpm, double music_rate) {
     if (music_rate == 1.0) {
         return ssprintf("%.0f", bpm);
@@ -377,18 +405,19 @@ static int lua_ivalues(lua_State* L) {
 }
 
 static std::string compute_hash_with_lua(const std::string& simfile_path,
-                                         const std::string& steps_type,
-                                         const std::string& difficulty,
-                                         const std::string& description,
-                                         TimingData* timing,
-                                         std::string* breakdown_text,
-                                         std::vector<std::string>* breakdown_levels,
-                                         int* stream_measures,
-                                         int* break_measures,
-                                         std::vector<int>* lua_notes_per_measure,
-                                         std::vector<double>* lua_nps_per_measure,
-                                         std::vector<bool>* lua_equally_spaced,
-                                         double* lua_peak_nps) {
+                                        const std::string& steps_type,
+                                        const std::string& difficulty,
+                                        const std::string& description,
+                                        TimingData* timing,
+                                        std::string* breakdown_text,
+                                        std::vector<std::string>* breakdown_levels,
+                                        int* stream_measures,
+                                        int* break_measures,
+                                        std::vector<StreamSequenceOut>* stream_sequences,
+                                        std::vector<int>* lua_notes_per_measure,
+                                        std::vector<double>* lua_nps_per_measure,
+                                        std::vector<bool>* lua_equally_spaced,
+                                        double* lua_peak_nps) {
     lua_State* L = luaL_newstate();
     if (!L) return "";
     luaL_openlibs(L);
@@ -518,6 +547,43 @@ static std::string compute_hash_with_lua(const std::string& simfile_path,
         *lua_peak_nps = lua_tonumber(L, -1);
         lua_pop(L, 1);
     }
+    if (stream_sequences) {
+        stream_sequences->clear();
+        lua_getglobal(L, "GetStreamSequences");
+        lua_getfield(L, -2, "NotesPerMeasure");
+        if (!lua_istable(L, -1)) {
+            lua_pop(L, 2); // pop non-table + function
+        } else {
+            lua_pushinteger(L, 16);
+            if (lua_pcall(L, 2, 1, 0) != 0) {
+                std::fprintf(stderr, "lua GetStreamSequences error: %s\n", lua_tostring(L, -1));
+                lua_pop(L, 1);
+            } else if (lua_istable(L, -1)) {
+                size_t len = lua_objlen(L, -1);
+                stream_sequences->reserve(len);
+                for (size_t i = 0; i < len; ++i) {
+                    lua_rawgeti(L, -1, static_cast<int>(i + 1));
+                    if (lua_istable(L, -1)) {
+                        StreamSequenceOut seg{};
+                        lua_getfield(L, -1, "streamStart");
+                        seg.stream_start = static_cast<int>(lua_tointeger(L, -1));
+                        lua_pop(L, 1);
+                        lua_getfield(L, -1, "streamEnd");
+                        seg.stream_end = static_cast<int>(lua_tointeger(L, -1));
+                        lua_pop(L, 1);
+                        lua_getfield(L, -1, "isBreak");
+                        seg.is_break = lua_toboolean(L, -1) != 0;
+                        lua_pop(L, 1);
+                        stream_sequences->push_back(seg);
+                    }
+                    lua_pop(L, 1);
+                }
+                lua_pop(L, 1); // pop result table
+            } else {
+                lua_pop(L, 1);
+            }
+        }
+    }
     auto call_breakdown = [&](int level, std::string& out) {
         lua_getglobal(L, "GenerateBreakdownText");
         lua_pushstring(L, "P1");
@@ -570,6 +636,10 @@ static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Ste
     int holds = static_cast<int>(radar[RadarCategory_Holds]);
     int mines = static_cast<int>(radar[RadarCategory_Mines]);
     int rolls = static_cast<int>(radar[RadarCategory_Rolls]);
+    int taps_and_holds = static_cast<int>(radar[RadarCategory_TapsAndHolds]);
+    int notes = static_cast<int>(radar[RadarCategory_Notes]);
+    int lifts = static_cast<int>(radar[RadarCategory_Lifts]);
+    int fakes = static_cast<int>(radar[RadarCategory_Fakes]);
     int jumps = static_cast<int>(radar[RadarCategory_Jumps]);
     int hands = static_cast<int>(radar[RadarCategory_Hands]);
     int quads = static_cast<int>(radar[RadarCategory_Hands]); // quads not separately tracked; reuse hands
@@ -587,8 +657,10 @@ static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Ste
     std::vector<std::string> breakdown_levels;
     int stream_measures = 0;
     int break_measures = 0;
+    std::vector<StreamSequenceOut> stream_sequences;
     out.hash = compute_hash_with_lua(simfile_path, st_str, diff_str, steps->GetDescription(), steps->GetTimingData(),
                                      &out.streams_breakdown, &breakdown_levels, &stream_measures, &break_measures,
+                                     &stream_sequences,
                                      &lua_notes_pm, &lua_nps_pm, &lua_equally_spaced, &lua_peak_nps);
     out.steps_type = st_str;
     out.difficulty = diff_str;
@@ -623,9 +695,14 @@ static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Ste
         out.peak_nps = 0.0;
         for (double v : nps_per_measure) out.peak_nps = std::max(out.peak_nps, v);
     }
+    out.stream_sequences = std::move(stream_sequences);
     out.holds = holds;
     out.mines = mines;
     out.rolls = rolls;
+    out.taps_and_holds = taps_and_holds;
+    out.notes = notes;
+    out.lifts = lifts;
+    out.fakes = fakes;
     if (breakdown_levels.size() == 4) {
         out.streams_breakdown_level1 = breakdown_levels[1];
         out.streams_breakdown_level2 = breakdown_levels[2];
@@ -644,6 +721,21 @@ static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Ste
     out.tech.jacks = static_cast<int>(tech[TechCountsCategory_Jacks]);
     out.tech.brackets = static_cast<int>(tech[TechCountsCategory_Brackets]);
     out.tech.doublesteps = static_cast<int>(tech[TechCountsCategory_Doublesteps]);
+
+    TimingData* td = steps->GetTimingData();
+    out.beat0_offset_seconds = static_cast<double>(td->m_fBeat0OffsetInSeconds);
+    out.beat0_group_offset_seconds = static_cast<double>(td->m_fBeat0GroupOffsetInSeconds);
+    out.timing_bpms = timing_segments_to_number_table(td, SEGMENT_BPM);
+    out.timing_stops = timing_segments_to_number_table(td, SEGMENT_STOP);
+    out.timing_delays = timing_segments_to_number_table(td, SEGMENT_DELAY);
+    out.timing_time_signatures = timing_segments_to_number_table(td, SEGMENT_TIME_SIG);
+    out.timing_warps = timing_segments_to_number_table(td, SEGMENT_WARP);
+    out.timing_labels = timing_labels_to_table(td);
+    out.timing_tickcounts = timing_segments_to_number_table(td, SEGMENT_TICKCOUNT);
+    out.timing_combos = timing_segments_to_number_table(td, SEGMENT_COMBO);
+    out.timing_speeds = timing_segments_to_number_table(td, SEGMENT_SPEED);
+    out.timing_scrolls = timing_segments_to_number_table(td, SEGMENT_SCROLL);
+    out.timing_fakes = timing_segments_to_number_table(td, SEGMENT_FAKE);
     return out;
 }
 

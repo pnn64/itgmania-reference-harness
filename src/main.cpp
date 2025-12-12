@@ -5,6 +5,29 @@
 
 #include "itgmania_adapter.h"
 
+static void emit_number_table(const std::vector<std::vector<double>>& table) {
+    std::cout << "[";
+    for (size_t i = 0; i < table.size(); ++i) {
+        if (i) std::cout << ", ";
+        std::cout << "[";
+        for (size_t j = 0; j < table[i].size(); ++j) {
+            if (j) std::cout << ", ";
+            std::cout << table[i][j];
+        }
+        std::cout << "]";
+    }
+    std::cout << "]";
+}
+
+static void emit_labels_table(const std::vector<TimingLabelOut>& labels) {
+    std::cout << "[";
+    for (size_t i = 0; i < labels.size(); ++i) {
+        if (i) std::cout << ", ";
+        std::cout << "[" << labels[i].beat << ", \"" << labels[i].label << "\"]";
+    }
+    std::cout << "]";
+}
+
 static void print_usage() {
     std::cerr << "Usage: itgmania-reference-harness <simfile> [steps-type] [difficulty]\n";
 }
@@ -42,9 +65,32 @@ static void emit_json_stub(
     std::cout << "  \"nps_per_measure\": [],\n";
     std::cout << "  \"equally_spaced_per_measure\": [],\n";
     std::cout << "  \"peak_nps\": null,\n";
+    std::cout << "  \"stream_sequences\": [],\n";
     std::cout << "  \"holds\": null,\n";
     std::cout << "  \"mines\": null,\n";
     std::cout << "  \"rolls\": null,\n";
+    std::cout << "  \"taps_and_holds\": null,\n";
+    std::cout << "  \"notes\": null,\n";
+    std::cout << "  \"lifts\": null,\n";
+    std::cout << "  \"fakes\": null,\n";
+    std::cout << "  \"jumps\": null,\n";
+    std::cout << "  \"hands\": null,\n";
+    std::cout << "  \"quads\": null,\n";
+    std::cout << "  \"timing\": {\n";
+    std::cout << "    \"beat0_offset_seconds\": null,\n";
+    std::cout << "    \"beat0_group_offset_seconds\": null,\n";
+    std::cout << "    \"bpms\": [],\n";
+    std::cout << "    \"stops\": [],\n";
+    std::cout << "    \"delays\": [],\n";
+    std::cout << "    \"time_signatures\": [],\n";
+    std::cout << "    \"warps\": [],\n";
+    std::cout << "    \"labels\": [],\n";
+    std::cout << "    \"tickcounts\": [],\n";
+    std::cout << "    \"combos\": [],\n";
+    std::cout << "    \"speeds\": [],\n";
+    std::cout << "    \"scrolls\": [],\n";
+    std::cout << "    \"fakes\": []\n";
+    std::cout << "  },\n";
     std::cout << "  \"tech_counts\": {\n";
     std::cout << "    \"crossovers\": 0,\n";
     std::cout << "    \"footswitches\": 0,\n";
@@ -102,12 +148,61 @@ static void emit_chart_json(const ChartMetrics& m, const std::string& indent) {
     }
     std::cout << "],\n";
     std::cout << ind2 << "\"peak_nps\": " << m.peak_nps << ",\n";
+    std::cout << ind2 << "\"stream_sequences\": [";
+    for (size_t i = 0; i < m.stream_sequences.size(); ++i) {
+        if (i) std::cout << ", ";
+        std::cout << "{\"stream_start\": " << m.stream_sequences[i].stream_start
+                  << ", \"stream_end\": " << m.stream_sequences[i].stream_end
+                  << ", \"is_break\": " << (m.stream_sequences[i].is_break ? "true" : "false") << "}";
+    }
+    std::cout << "],\n";
     std::cout << ind2 << "\"holds\": " << m.holds << ",\n";
     std::cout << ind2 << "\"mines\": " << m.mines << ",\n";
     std::cout << ind2 << "\"rolls\": " << m.rolls << ",\n";
+    std::cout << ind2 << "\"taps_and_holds\": " << m.taps_and_holds << ",\n";
+    std::cout << ind2 << "\"notes\": " << m.notes << ",\n";
+    std::cout << ind2 << "\"lifts\": " << m.lifts << ",\n";
+    std::cout << ind2 << "\"fakes\": " << m.fakes << ",\n";
     std::cout << ind2 << "\"jumps\": " << m.jumps << ",\n";
     std::cout << ind2 << "\"hands\": " << m.hands << ",\n";
     std::cout << ind2 << "\"quads\": " << m.quads << ",\n";
+    std::cout << ind2 << "\"timing\": {\n";
+    std::cout << ind2 << "  \"beat0_offset_seconds\": " << m.beat0_offset_seconds << ",\n";
+    std::cout << ind2 << "  \"beat0_group_offset_seconds\": " << m.beat0_group_offset_seconds << ",\n";
+    std::cout << ind2 << "  \"bpms\": ";
+    emit_number_table(m.timing_bpms);
+    std::cout << ",\n";
+    std::cout << ind2 << "  \"stops\": ";
+    emit_number_table(m.timing_stops);
+    std::cout << ",\n";
+    std::cout << ind2 << "  \"delays\": ";
+    emit_number_table(m.timing_delays);
+    std::cout << ",\n";
+    std::cout << ind2 << "  \"time_signatures\": ";
+    emit_number_table(m.timing_time_signatures);
+    std::cout << ",\n";
+    std::cout << ind2 << "  \"warps\": ";
+    emit_number_table(m.timing_warps);
+    std::cout << ",\n";
+    std::cout << ind2 << "  \"labels\": ";
+    emit_labels_table(m.timing_labels);
+    std::cout << ",\n";
+    std::cout << ind2 << "  \"tickcounts\": ";
+    emit_number_table(m.timing_tickcounts);
+    std::cout << ",\n";
+    std::cout << ind2 << "  \"combos\": ";
+    emit_number_table(m.timing_combos);
+    std::cout << ",\n";
+    std::cout << ind2 << "  \"speeds\": ";
+    emit_number_table(m.timing_speeds);
+    std::cout << ",\n";
+    std::cout << ind2 << "  \"scrolls\": ";
+    emit_number_table(m.timing_scrolls);
+    std::cout << ",\n";
+    std::cout << ind2 << "  \"fakes\": ";
+    emit_number_table(m.timing_fakes);
+    std::cout << "\n";
+    std::cout << ind2 << "},\n";
     std::cout << ind2 << "\"tech_counts\": {\n";
     std::cout << ind2 << "  \"crossovers\": " << m.tech.crossovers << ",\n";
     std::cout << ind2 << "  \"footswitches\": " << m.tech.footswitches << ",\n";
