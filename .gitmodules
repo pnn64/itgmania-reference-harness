@@ -1,0 +1,3 @@
+[submodule "extern/itgmania"]
+	path = extern/itgmania
+	url = https://github.com/itgmania/itgmania.git
