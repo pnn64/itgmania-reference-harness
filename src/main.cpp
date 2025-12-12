@@ -1,5 +1,4 @@
 #include <iostream>
-#include <map>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -32,230 +31,247 @@ static std::string json_escape(std::string_view s) {
     return out;
 }
 
-static void emit_number_table(const std::vector<std::vector<double>>& table) {
-    std::cout << "[";
-    for (size_t i = 0; i < table.size(); ++i) {
-        if (i) std::cout << ", ";
-        std::cout << "[";
-        for (size_t j = 0; j < table[i].size(); ++j) {
-            if (j) std::cout << ", ";
-            std::cout << table[i][j];
-        }
-        std::cout << "]";
+template <typename T, typename EmitOneFn>
+static void emit_inline_array(std::ostream& out, const std::vector<T>& values, const EmitOneFn& emit_one) {
+    out << "[";
+    for (size_t i = 0; i < values.size(); ++i) {
+        if (i) out << ", ";
+        emit_one(out, values[i]);
     }
-    std::cout << "]";
+    out << "]";
 }
 
-static void emit_labels_table(const std::vector<TimingLabelOut>& labels) {
-    std::cout << "[";
-    for (size_t i = 0; i < labels.size(); ++i) {
-        if (i) std::cout << ", ";
-        std::cout << "[" << labels[i].beat << ", \"" << json_escape(labels[i].label) << "\"]";
-    }
-    std::cout << "]";
+static void emit_number_table(std::ostream& out, const std::vector<std::vector<double>>& table) {
+    emit_inline_array(out, table, [](std::ostream& out, const std::vector<double>& row) {
+        emit_inline_array(out, row, [](std::ostream& out, double v) { out << v; });
+    });
+}
+
+static void emit_labels_table(std::ostream& out, const std::vector<TimingLabelOut>& labels) {
+    emit_inline_array(out, labels, [](std::ostream& out, const TimingLabelOut& label) {
+        out << "[" << label.beat << ", \"" << json_escape(label.label) << "\"]";
+    });
 }
 
 static void print_usage() {
     std::cerr << "Usage: itgmania-reference-harness <simfile> [steps-type] [difficulty] [description]\n";
 }
 
+static void emit_json_stub_timing(std::ostream& out) {
+    out << "  \"timing\": {\n";
+    out << "    \"beat0_offset_seconds\": null,\n";
+    out << "    \"beat0_group_offset_seconds\": null,\n";
+    out << "    \"bpms\": [],\n";
+    out << "    \"stops\": [],\n";
+    out << "    \"delays\": [],\n";
+    out << "    \"time_signatures\": [],\n";
+    out << "    \"warps\": [],\n";
+    out << "    \"labels\": [],\n";
+    out << "    \"tickcounts\": [],\n";
+    out << "    \"combos\": [],\n";
+    out << "    \"speeds\": [],\n";
+    out << "    \"scrolls\": [],\n";
+    out << "    \"fakes\": []\n";
+    out << "  },\n";
+}
+
+static void emit_json_stub_tech_counts(std::ostream& out) {
+    out << "  \"tech_counts\": {\n";
+    out << "    \"crossovers\": 0,\n";
+    out << "    \"footswitches\": 0,\n";
+    out << "    \"sideswitches\": 0,\n";
+    out << "    \"jacks\": 0,\n";
+    out << "    \"brackets\": 0,\n";
+    out << "    \"doublesteps\": 0\n";
+    out << "  }\n";
+}
+
 static void emit_json_stub(
+    std::ostream& out,
     const std::string& simfile,
     const std::string& steps_type,
     const std::string& difficulty) {
-    std::cout << "{\n";
-    std::cout << "  \"status\": \"stub\",\n";
-    std::cout << "  \"simfile\": \"" << json_escape(simfile) << "\",\n";
-    std::cout << "  \"title\": \"\",\n";
-    std::cout << "  \"subtitle\": \"\",\n";
-    std::cout << "  \"artist\": \"\",\n";
-    std::cout << "  \"step_artist\": \"\",\n";
-    std::cout << "  \"description\": \"\",\n";
-    std::cout << "  \"steps_type\": \"" << json_escape(steps_type) << "\",\n";
-    std::cout << "  \"difficulty\": \"" << json_escape(difficulty) << "\",\n";
-    std::cout << "  \"meter\": null,\n";
-    std::cout << "  \"bpms\": \"\",\n";
-    std::cout << "  \"bpm_min\": null,\n";
-    std::cout << "  \"bpm_max\": null,\n";
-    std::cout << "  \"display_bpm\": \"\",\n";
-    std::cout << "  \"display_bpm_min\": null,\n";
-    std::cout << "  \"display_bpm_max\": null,\n";
-    std::cout << "  \"hash\": \"\",\n";
-    std::cout << "  \"duration_seconds\": null,\n";
-    std::cout << "  \"streams_breakdown\": \"\",\n";
-    std::cout << "  \"streams_breakdown_level1\": \"\",\n";
-    std::cout << "  \"streams_breakdown_level2\": \"\",\n";
-    std::cout << "  \"streams_breakdown_level3\": \"\",\n";
-    std::cout << "  \"total_stream_measures\": null,\n";
-    std::cout << "  \"total_break_measures\": null,\n";
-    std::cout << "  \"total_steps\": null,\n";
-    std::cout << "  \"notes_per_measure\": [],\n";
-    std::cout << "  \"nps_per_measure\": [],\n";
-    std::cout << "  \"equally_spaced_per_measure\": [],\n";
-    std::cout << "  \"peak_nps\": null,\n";
-    std::cout << "  \"stream_sequences\": [],\n";
-    std::cout << "  \"holds\": null,\n";
-    std::cout << "  \"mines\": null,\n";
-    std::cout << "  \"rolls\": null,\n";
-    std::cout << "  \"taps_and_holds\": null,\n";
-    std::cout << "  \"notes\": null,\n";
-    std::cout << "  \"lifts\": null,\n";
-    std::cout << "  \"fakes\": null,\n";
-    std::cout << "  \"jumps\": null,\n";
-    std::cout << "  \"hands\": null,\n";
-    std::cout << "  \"quads\": null,\n";
-    std::cout << "  \"timing\": {\n";
-    std::cout << "    \"beat0_offset_seconds\": null,\n";
-    std::cout << "    \"beat0_group_offset_seconds\": null,\n";
-    std::cout << "    \"bpms\": [],\n";
-    std::cout << "    \"stops\": [],\n";
-    std::cout << "    \"delays\": [],\n";
-    std::cout << "    \"time_signatures\": [],\n";
-    std::cout << "    \"warps\": [],\n";
-    std::cout << "    \"labels\": [],\n";
-    std::cout << "    \"tickcounts\": [],\n";
-    std::cout << "    \"combos\": [],\n";
-    std::cout << "    \"speeds\": [],\n";
-    std::cout << "    \"scrolls\": [],\n";
-    std::cout << "    \"fakes\": []\n";
-    std::cout << "  },\n";
-    std::cout << "  \"tech_counts\": {\n";
-    std::cout << "    \"crossovers\": 0,\n";
-    std::cout << "    \"footswitches\": 0,\n";
-    std::cout << "    \"sideswitches\": 0,\n";
-    std::cout << "    \"jacks\": 0,\n";
-    std::cout << "    \"brackets\": 0,\n";
-    std::cout << "    \"doublesteps\": 0\n";
-    std::cout << "  }\n";
-    std::cout << "}\n";
+    out << "{\n";
+    out << "  \"status\": \"stub\",\n";
+    out << "  \"simfile\": \"" << json_escape(simfile) << "\",\n";
+    out << "  \"title\": \"\",\n";
+    out << "  \"subtitle\": \"\",\n";
+    out << "  \"artist\": \"\",\n";
+    out << "  \"step_artist\": \"\",\n";
+    out << "  \"description\": \"\",\n";
+    out << "  \"steps_type\": \"" << json_escape(steps_type) << "\",\n";
+    out << "  \"difficulty\": \"" << json_escape(difficulty) << "\",\n";
+    out << "  \"meter\": null,\n";
+    out << "  \"bpms\": \"\",\n";
+    out << "  \"bpm_min\": null,\n";
+    out << "  \"bpm_max\": null,\n";
+    out << "  \"display_bpm\": \"\",\n";
+    out << "  \"display_bpm_min\": null,\n";
+    out << "  \"display_bpm_max\": null,\n";
+    out << "  \"hash\": \"\",\n";
+    out << "  \"duration_seconds\": null,\n";
+    out << "  \"streams_breakdown\": \"\",\n";
+    out << "  \"streams_breakdown_level1\": \"\",\n";
+    out << "  \"streams_breakdown_level2\": \"\",\n";
+    out << "  \"streams_breakdown_level3\": \"\",\n";
+    out << "  \"total_stream_measures\": null,\n";
+    out << "  \"total_break_measures\": null,\n";
+    out << "  \"total_steps\": null,\n";
+    out << "  \"notes_per_measure\": [],\n";
+    out << "  \"nps_per_measure\": [],\n";
+    out << "  \"equally_spaced_per_measure\": [],\n";
+    out << "  \"peak_nps\": null,\n";
+    out << "  \"stream_sequences\": [],\n";
+    out << "  \"holds\": null,\n";
+    out << "  \"mines\": null,\n";
+    out << "  \"rolls\": null,\n";
+    out << "  \"taps_and_holds\": null,\n";
+    out << "  \"notes\": null,\n";
+    out << "  \"lifts\": null,\n";
+    out << "  \"fakes\": null,\n";
+    out << "  \"jumps\": null,\n";
+    out << "  \"hands\": null,\n";
+    out << "  \"quads\": null,\n";
+    emit_json_stub_timing(out);
+    emit_json_stub_tech_counts(out);
+    out << "}\n";
 }
 
-static void emit_chart_json(const ChartMetrics& m, const std::string& indent) {
+static void emit_chart_json_header(std::ostream& out, const ChartMetrics& m, const std::string& ind2) {
+    out << ind2 << "\"status\": \"ok\",\n";
+    out << ind2 << "\"simfile\": \"" << json_escape(m.simfile) << "\",\n";
+    out << ind2 << "\"title\": \"" << json_escape(m.title) << "\",\n";
+    out << ind2 << "\"subtitle\": \"" << json_escape(m.subtitle) << "\",\n";
+    out << ind2 << "\"artist\": \"" << json_escape(m.artist) << "\",\n";
+    out << ind2 << "\"step_artist\": \"" << json_escape(m.step_artist) << "\",\n";
+    out << ind2 << "\"description\": \"" << json_escape(m.description) << "\",\n";
+    out << ind2 << "\"steps_type\": \"" << json_escape(m.steps_type) << "\",\n";
+    out << ind2 << "\"difficulty\": \"" << json_escape(m.difficulty) << "\",\n";
+    out << ind2 << "\"meter\": " << m.meter << ",\n";
+    out << ind2 << "\"bpms\": \"" << json_escape(m.bpms) << "\",\n";
+    out << ind2 << "\"bpm_min\": " << m.bpm_min << ",\n";
+    out << ind2 << "\"bpm_max\": " << m.bpm_max << ",\n";
+    out << ind2 << "\"display_bpm\": \"" << json_escape(m.display_bpm) << "\",\n";
+    out << ind2 << "\"display_bpm_min\": " << m.display_bpm_min << ",\n";
+    out << ind2 << "\"display_bpm_max\": " << m.display_bpm_max << ",\n";
+    out << ind2 << "\"hash\": \"" << json_escape(m.hash) << "\",\n";
+    out << ind2 << "\"duration_seconds\": " << m.duration_seconds << ",\n";
+    out << ind2 << "\"streams_breakdown\": \"" << json_escape(m.streams_breakdown) << "\",\n";
+    out << ind2 << "\"streams_breakdown_level1\": \"" << json_escape(m.streams_breakdown_level1) << "\",\n";
+    out << ind2 << "\"streams_breakdown_level2\": \"" << json_escape(m.streams_breakdown_level2) << "\",\n";
+    out << ind2 << "\"streams_breakdown_level3\": \"" << json_escape(m.streams_breakdown_level3) << "\",\n";
+    out << ind2 << "\"total_stream_measures\": " << m.total_stream_measures << ",\n";
+    out << ind2 << "\"total_break_measures\": " << m.total_break_measures << ",\n";
+    out << ind2 << "\"total_steps\": " << m.total_steps << ",\n";
+}
+
+static void emit_chart_json_measure_data(std::ostream& out, const ChartMetrics& m, const std::string& ind2) {
+    out << ind2 << "\"notes_per_measure\": ";
+    emit_inline_array(out, m.notes_per_measure, [](std::ostream& out, int v) { out << v; });
+    out << ",\n";
+
+    out << ind2 << "\"nps_per_measure\": ";
+    emit_inline_array(out, m.nps_per_measure, [](std::ostream& out, double v) { out << v; });
+    out << ",\n";
+
+    out << ind2 << "\"equally_spaced_per_measure\": ";
+    emit_inline_array(out, m.equally_spaced_per_measure, [](std::ostream& out, bool v) { out << (v ? "true" : "false"); });
+    out << ",\n";
+
+    out << ind2 << "\"peak_nps\": " << m.peak_nps << ",\n";
+    out << ind2 << "\"stream_sequences\": ";
+    emit_inline_array(out, m.stream_sequences, [](std::ostream& out, const StreamSequenceOut& seq) {
+        out << "{\"stream_start\": " << seq.stream_start << ", \"stream_end\": " << seq.stream_end
+            << ", \"is_break\": " << (seq.is_break ? "true" : "false") << "}";
+    });
+    out << ",\n";
+
+    out << ind2 << "\"holds\": " << m.holds << ",\n";
+    out << ind2 << "\"mines\": " << m.mines << ",\n";
+    out << ind2 << "\"rolls\": " << m.rolls << ",\n";
+    out << ind2 << "\"taps_and_holds\": " << m.taps_and_holds << ",\n";
+    out << ind2 << "\"notes\": " << m.notes << ",\n";
+    out << ind2 << "\"lifts\": " << m.lifts << ",\n";
+    out << ind2 << "\"fakes\": " << m.fakes << ",\n";
+    out << ind2 << "\"jumps\": " << m.jumps << ",\n";
+    out << ind2 << "\"hands\": " << m.hands << ",\n";
+    out << ind2 << "\"quads\": " << m.quads << ",\n";
+}
+
+static void emit_chart_json_timing(std::ostream& out, const ChartMetrics& m, const std::string& ind2) {
+    out << ind2 << "\"timing\": {\n";
+    out << ind2 << "  \"beat0_offset_seconds\": " << m.beat0_offset_seconds << ",\n";
+    out << ind2 << "  \"beat0_group_offset_seconds\": " << m.beat0_group_offset_seconds << ",\n";
+    out << ind2 << "  \"bpms\": ";
+    emit_number_table(out, m.timing_bpms);
+    out << ",\n";
+    out << ind2 << "  \"stops\": ";
+    emit_number_table(out, m.timing_stops);
+    out << ",\n";
+    out << ind2 << "  \"delays\": ";
+    emit_number_table(out, m.timing_delays);
+    out << ",\n";
+    out << ind2 << "  \"time_signatures\": ";
+    emit_number_table(out, m.timing_time_signatures);
+    out << ",\n";
+    out << ind2 << "  \"warps\": ";
+    emit_number_table(out, m.timing_warps);
+    out << ",\n";
+    out << ind2 << "  \"labels\": ";
+    emit_labels_table(out, m.timing_labels);
+    out << ",\n";
+    out << ind2 << "  \"tickcounts\": ";
+    emit_number_table(out, m.timing_tickcounts);
+    out << ",\n";
+    out << ind2 << "  \"combos\": ";
+    emit_number_table(out, m.timing_combos);
+    out << ",\n";
+    out << ind2 << "  \"speeds\": ";
+    emit_number_table(out, m.timing_speeds);
+    out << ",\n";
+    out << ind2 << "  \"scrolls\": ";
+    emit_number_table(out, m.timing_scrolls);
+    out << ",\n";
+    out << ind2 << "  \"fakes\": ";
+    emit_number_table(out, m.timing_fakes);
+    out << "\n";
+    out << ind2 << "},\n";
+}
+
+static void emit_chart_json_tech_counts(std::ostream& out, const ChartMetrics& m, const std::string& indent, const std::string& ind2) {
+    out << ind2 << "\"tech_counts\": {\n";
+    out << ind2 << "  \"crossovers\": " << m.tech.crossovers << ",\n";
+    out << ind2 << "  \"footswitches\": " << m.tech.footswitches << ",\n";
+    out << ind2 << "  \"sideswitches\": " << m.tech.sideswitches << ",\n";
+    out << ind2 << "  \"jacks\": " << m.tech.jacks << ",\n";
+    out << ind2 << "  \"brackets\": " << m.tech.brackets << ",\n";
+    out << ind2 << "  \"doublesteps\": " << m.tech.doublesteps << "\n";
+    out << ind2 << "}\n";
+    out << indent << "}";
+}
+
+static void emit_chart_json(std::ostream& out, const ChartMetrics& m, const std::string& indent) {
     const std::string ind2 = indent + "  ";
-    std::cout << indent << "{\n";
-    std::cout << ind2 << "\"status\": \"ok\",\n";
-    std::cout << ind2 << "\"simfile\": \"" << json_escape(m.simfile) << "\",\n";
-    std::cout << ind2 << "\"title\": \"" << json_escape(m.title) << "\",\n";
-    std::cout << ind2 << "\"subtitle\": \"" << json_escape(m.subtitle) << "\",\n";
-    std::cout << ind2 << "\"artist\": \"" << json_escape(m.artist) << "\",\n";
-    std::cout << ind2 << "\"step_artist\": \"" << json_escape(m.step_artist) << "\",\n";
-    std::cout << ind2 << "\"description\": \"" << json_escape(m.description) << "\",\n";
-    std::cout << ind2 << "\"steps_type\": \"" << json_escape(m.steps_type) << "\",\n";
-    std::cout << ind2 << "\"difficulty\": \"" << json_escape(m.difficulty) << "\",\n";
-    std::cout << ind2 << "\"meter\": " << m.meter << ",\n";
-    std::cout << ind2 << "\"bpms\": \"" << json_escape(m.bpms) << "\",\n";
-    std::cout << ind2 << "\"bpm_min\": " << m.bpm_min << ",\n";
-    std::cout << ind2 << "\"bpm_max\": " << m.bpm_max << ",\n";
-    std::cout << ind2 << "\"display_bpm\": \"" << json_escape(m.display_bpm) << "\",\n";
-    std::cout << ind2 << "\"display_bpm_min\": " << m.display_bpm_min << ",\n";
-    std::cout << ind2 << "\"display_bpm_max\": " << m.display_bpm_max << ",\n";
-    std::cout << ind2 << "\"hash\": \"" << json_escape(m.hash) << "\",\n";
-    std::cout << ind2 << "\"duration_seconds\": " << m.duration_seconds << ",\n";
-    std::cout << ind2 << "\"streams_breakdown\": \"" << json_escape(m.streams_breakdown) << "\",\n";
-    std::cout << ind2 << "\"streams_breakdown_level1\": \"" << json_escape(m.streams_breakdown_level1) << "\",\n";
-    std::cout << ind2 << "\"streams_breakdown_level2\": \"" << json_escape(m.streams_breakdown_level2) << "\",\n";
-    std::cout << ind2 << "\"streams_breakdown_level3\": \"" << json_escape(m.streams_breakdown_level3) << "\",\n";
-    std::cout << ind2 << "\"total_stream_measures\": " << m.total_stream_measures << ",\n";
-    std::cout << ind2 << "\"total_break_measures\": " << m.total_break_measures << ",\n";
-    std::cout << ind2 << "\"total_steps\": " << m.total_steps << ",\n";
-    std::cout << ind2 << "\"notes_per_measure\": [";
-    for (size_t i = 0; i < m.notes_per_measure.size(); ++i) {
-        if (i) std::cout << ", ";
-        std::cout << m.notes_per_measure[i];
-    }
-    std::cout << "],\n";
-    std::cout << ind2 << "\"nps_per_measure\": [";
-    for (size_t i = 0; i < m.nps_per_measure.size(); ++i) {
-        if (i) std::cout << ", ";
-        std::cout << m.nps_per_measure[i];
-    }
-    std::cout << "],\n";
-    std::cout << ind2 << "\"equally_spaced_per_measure\": [";
-    for (size_t i = 0; i < m.equally_spaced_per_measure.size(); ++i) {
-        if (i) std::cout << ", ";
-        std::cout << (m.equally_spaced_per_measure[i] ? "true" : "false");
-    }
-    std::cout << "],\n";
-    std::cout << ind2 << "\"peak_nps\": " << m.peak_nps << ",\n";
-    std::cout << ind2 << "\"stream_sequences\": [";
-    for (size_t i = 0; i < m.stream_sequences.size(); ++i) {
-        if (i) std::cout << ", ";
-        std::cout << "{\"stream_start\": " << m.stream_sequences[i].stream_start
-                  << ", \"stream_end\": " << m.stream_sequences[i].stream_end
-                  << ", \"is_break\": " << (m.stream_sequences[i].is_break ? "true" : "false") << "}";
-    }
-    std::cout << "],\n";
-    std::cout << ind2 << "\"holds\": " << m.holds << ",\n";
-    std::cout << ind2 << "\"mines\": " << m.mines << ",\n";
-    std::cout << ind2 << "\"rolls\": " << m.rolls << ",\n";
-    std::cout << ind2 << "\"taps_and_holds\": " << m.taps_and_holds << ",\n";
-    std::cout << ind2 << "\"notes\": " << m.notes << ",\n";
-    std::cout << ind2 << "\"lifts\": " << m.lifts << ",\n";
-    std::cout << ind2 << "\"fakes\": " << m.fakes << ",\n";
-    std::cout << ind2 << "\"jumps\": " << m.jumps << ",\n";
-    std::cout << ind2 << "\"hands\": " << m.hands << ",\n";
-    std::cout << ind2 << "\"quads\": " << m.quads << ",\n";
-    std::cout << ind2 << "\"timing\": {\n";
-    std::cout << ind2 << "  \"beat0_offset_seconds\": " << m.beat0_offset_seconds << ",\n";
-    std::cout << ind2 << "  \"beat0_group_offset_seconds\": " << m.beat0_group_offset_seconds << ",\n";
-    std::cout << ind2 << "  \"bpms\": ";
-    emit_number_table(m.timing_bpms);
-    std::cout << ",\n";
-    std::cout << ind2 << "  \"stops\": ";
-    emit_number_table(m.timing_stops);
-    std::cout << ",\n";
-    std::cout << ind2 << "  \"delays\": ";
-    emit_number_table(m.timing_delays);
-    std::cout << ",\n";
-    std::cout << ind2 << "  \"time_signatures\": ";
-    emit_number_table(m.timing_time_signatures);
-    std::cout << ",\n";
-    std::cout << ind2 << "  \"warps\": ";
-    emit_number_table(m.timing_warps);
-    std::cout << ",\n";
-    std::cout << ind2 << "  \"labels\": ";
-    emit_labels_table(m.timing_labels);
-    std::cout << ",\n";
-    std::cout << ind2 << "  \"tickcounts\": ";
-    emit_number_table(m.timing_tickcounts);
-    std::cout << ",\n";
-    std::cout << ind2 << "  \"combos\": ";
-    emit_number_table(m.timing_combos);
-    std::cout << ",\n";
-    std::cout << ind2 << "  \"speeds\": ";
-    emit_number_table(m.timing_speeds);
-    std::cout << ",\n";
-    std::cout << ind2 << "  \"scrolls\": ";
-    emit_number_table(m.timing_scrolls);
-    std::cout << ",\n";
-    std::cout << ind2 << "  \"fakes\": ";
-    emit_number_table(m.timing_fakes);
-    std::cout << "\n";
-    std::cout << ind2 << "},\n";
-    std::cout << ind2 << "\"tech_counts\": {\n";
-    std::cout << ind2 << "  \"crossovers\": " << m.tech.crossovers << ",\n";
-    std::cout << ind2 << "  \"footswitches\": " << m.tech.footswitches << ",\n";
-    std::cout << ind2 << "  \"sideswitches\": " << m.tech.sideswitches << ",\n";
-    std::cout << ind2 << "  \"jacks\": " << m.tech.jacks << ",\n";
-    std::cout << ind2 << "  \"brackets\": " << m.tech.brackets << ",\n";
-    std::cout << ind2 << "  \"doublesteps\": " << m.tech.doublesteps << "\n";
-    std::cout << ind2 << "}\n";
-    std::cout << indent << "}";
+    out << indent << "{\n";
+    emit_chart_json_header(out, m, ind2);
+    emit_chart_json_measure_data(out, m, ind2);
+    emit_chart_json_timing(out, m, ind2);
+    emit_chart_json_tech_counts(out, m, indent, ind2);
 }
 
-static void emit_json(const ChartMetrics& m) {
-    emit_chart_json(m, "");
-    std::cout << "\n";
+static void emit_json(std::ostream& out, const ChartMetrics& m) {
+    emit_chart_json(out, m, "");
+    out << "\n";
 }
 
-static void emit_json_array(const std::vector<ChartMetrics>& charts) {
-    std::cout << "[\n";
+static void emit_json_array(std::ostream& out, const std::vector<ChartMetrics>& charts) {
+    out << "[\n";
     for (size_t i = 0; i < charts.size(); ++i) {
-        emit_chart_json(charts[i], "  ");
-        if (i + 1 < charts.size()) std::cout << ",";
-        std::cout << "\n";
+        emit_chart_json(out, charts[i], "  ");
+        if (i + 1 < charts.size()) out << ",";
+        out << "\n";
     }
-    std::cout << "]\n";
+    out << "]\n";
 }
 
 int main(int argc, char** argv) {
@@ -274,7 +290,7 @@ int main(int argc, char** argv) {
     if (steps_type.empty() && difficulty.empty()) {
         auto charts = parse_all_charts_with_itgmania(simfile, "", "", "");
         if (!charts.empty()) {
-            emit_json_array(charts);
+            emit_json_array(std::cout, charts);
             return 0;
         }
     }
@@ -284,15 +300,15 @@ int main(int argc, char** argv) {
     if (!steps_type.empty() && difficulty == "edit" && description.empty()) {
         auto charts = parse_all_charts_with_itgmania(simfile, steps_type, difficulty, "");
         if (!charts.empty()) {
-            emit_json_array(charts);
+            emit_json_array(std::cout, charts);
             return 0;
         }
     }
 
     if (auto parsed = parse_chart_with_itgmania(simfile, steps_type, difficulty, description)) {
-        emit_json(*parsed);
+        emit_json(std::cout, *parsed);
     } else {
-        emit_json_stub(simfile, steps_type, difficulty);
+        emit_json_stub(std::cout, simfile, steps_type, difficulty);
     }
 
     return 0;

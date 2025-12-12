@@ -129,6 +129,4 @@ The CLI prints either:
 
 ## License
 
-This repository is MIT licensed (see `LICENSE`).
-
 ITGMania and Simply Love are included as a submodule and are licensed separately (see `src/extern/itgmania/`).
