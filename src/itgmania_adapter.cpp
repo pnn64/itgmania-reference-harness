@@ -122,17 +122,16 @@ static std::string diff_string(Difficulty d) {
 }
 
 static std::string bpm_string_from_timing(TimingData* td) {
-    std::vector<TimingSegment*> segments = td->GetTimingSegments(SEGMENT_BPM);
-    std::vector<RString> bpmStrings;
-    bpmStrings.reserve(segments.size());
+    const std::vector<TimingSegment*>& segments = td->GetTimingSegments(SEGMENT_BPM);
+    std::vector<RString> bpm_strings;
+    bpm_strings.reserve(segments.size());
     for (TimingSegment* segment : segments) {
-        BPMSegment* bpmSegment = ToBPM(segment);
-        float beat = bpmSegment->GetBeat();
-        float bpm = bpmSegment->GetBPM();
-        RString segmentStr = ssprintf("%s=%s", NormalizeDecimal(beat).c_str(), NormalizeDecimal(bpm).c_str());
-        bpmStrings.push_back(segmentStr);
+        const BPMSegment* bpm_segment = ToBPM(segment);
+        const float beat = bpm_segment->GetBeat();
+        const float bpm = bpm_segment->GetBPM();
+        bpm_strings.push_back(ssprintf("%s=%s", NormalizeDecimal(beat).c_str(), NormalizeDecimal(bpm).c_str()));
     }
-    return join(",", bpmStrings);
+    return join(",", bpm_strings);
 }
 
 static std::vector<std::vector<double>> timing_segments_to_number_table(TimingData* td, TimingSegmentType tst) {
@@ -619,30 +618,126 @@ static std::string compute_hash_with_lua(const std::string& simfile_path,
 }
 } // namespace
 
-static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Steps* steps, const Song& song) {
-    steps->GetTimingData()->TidyUpData(false);
+struct RadarCountsOut {
+    int holds = 0;
+    int mines = 0;
+    int rolls = 0;
+    int taps_and_holds = 0;
+    int notes = 0;
+    int lifts = 0;
+    int fakes = 0;
+    int jumps = 0;
+    int hands = 0;
+    int quads = 0;
+};
+
+static RadarCountsOut get_radar_counts(const RadarValues& radar) {
+    RadarCountsOut out;
+    out.holds = static_cast<int>(radar[RadarCategory_Holds]);
+    out.mines = static_cast<int>(radar[RadarCategory_Mines]);
+    out.rolls = static_cast<int>(radar[RadarCategory_Rolls]);
+    out.taps_and_holds = static_cast<int>(radar[RadarCategory_TapsAndHolds]);
+    out.notes = static_cast<int>(radar[RadarCategory_Notes]);
+    out.lifts = static_cast<int>(radar[RadarCategory_Lifts]);
+    out.fakes = static_cast<int>(radar[RadarCategory_Fakes]);
+    out.jumps = static_cast<int>(radar[RadarCategory_Jumps]);
+    out.hands = static_cast<int>(radar[RadarCategory_Hands]);
+    out.quads = static_cast<int>(radar[RadarCategory_Hands]); // quads not separately tracked; reuse hands
+    return out;
+}
+
+static void prepare_steps_for_metrics(Steps* steps, TimingData* timing) {
+    timing->TidyUpData(false);
     steps->CalculateStepStats(0.0f);
     steps->CalculateGrooveStatsHash();
     steps->CalculateTechCounts();
     steps->CalculateMeasureInfo();
+}
 
-    StepsType st = steps->m_StepsType;
-    std::string st_str = steps_type_string(st);
-    std::string diff_str = diff_string(steps->GetDifficulty());
+struct MeasureStatsOut {
+    std::vector<int> notes_per_measure;
+    std::vector<double> nps_per_measure;
+    std::vector<bool> equally_spaced_per_measure;
+    double peak_nps = 0.0;
+    int total_steps = 0;
+};
+
+static MeasureStatsOut get_measure_stats(
+    Steps* steps,
+    std::vector<int> lua_notes_pm,
+    std::vector<double> lua_nps_pm,
+    std::vector<bool> lua_equally_spaced,
+    double lua_peak_nps) {
+    MeasureStatsOut out;
+    if (lua_notes_pm.empty()) {
+        const std::vector<int>& npm = steps->GetNotesPerMeasure(PLAYER_1);
+        out.notes_per_measure.assign(npm.begin(), npm.end());
+
+        const std::vector<float>& nps = steps->GetNpsPerMeasure(PLAYER_1);
+        out.nps_per_measure.reserve(nps.size());
+        for (float v : nps) out.nps_per_measure.push_back(static_cast<double>(v));
+    } else {
+        out.notes_per_measure = std::move(lua_notes_pm);
+        out.nps_per_measure = std::move(lua_nps_pm);
+    }
+
+    out.total_steps = static_cast<int>(std::accumulate(out.notes_per_measure.begin(), out.notes_per_measure.end(), 0));
+    if (!lua_equally_spaced.empty()) {
+        out.equally_spaced_per_measure = std::move(lua_equally_spaced);
+        out.peak_nps = lua_peak_nps;
+    } else {
+        // Fallback: mark all measures as not guaranteed equally spaced and use computed peak.
+        out.equally_spaced_per_measure.assign(out.notes_per_measure.size(), false);
+        out.peak_nps = 0.0;
+        for (double v : out.nps_per_measure) out.peak_nps = std::max(out.peak_nps, v);
+    }
+    return out;
+}
+
+static double get_duration_seconds(Steps* steps, TimingData* timing) {
+    NoteData nd;
+    steps->GetNoteData(nd);
+    const float last_beat = nd.GetLastBeat();
+    return timing->GetElapsedTimeFromBeat(last_beat);
+}
+
+static void fill_timing_tables(ChartMetrics& out, TimingData* td) {
+    out.beat0_offset_seconds = static_cast<double>(td->m_fBeat0OffsetInSeconds);
+    out.beat0_group_offset_seconds = static_cast<double>(td->m_fBeat0GroupOffsetInSeconds);
+    out.timing_bpms = timing_segments_to_number_table(td, SEGMENT_BPM);
+    out.timing_stops = timing_segments_to_number_table(td, SEGMENT_STOP);
+    out.timing_delays = timing_segments_to_number_table(td, SEGMENT_DELAY);
+    out.timing_time_signatures = timing_segments_to_number_table(td, SEGMENT_TIME_SIG);
+    out.timing_warps = timing_segments_to_number_table(td, SEGMENT_WARP);
+    out.timing_labels = timing_labels_to_table(td);
+    out.timing_tickcounts = timing_segments_to_number_table(td, SEGMENT_TICKCOUNT);
+    out.timing_combos = timing_segments_to_number_table(td, SEGMENT_COMBO);
+    out.timing_speeds = timing_segments_to_number_table(td, SEGMENT_SPEED);
+    out.timing_scrolls = timing_segments_to_number_table(td, SEGMENT_SCROLL);
+    out.timing_fakes = timing_segments_to_number_table(td, SEGMENT_FAKE);
+}
+
+static void fill_tech_counts(ChartMetrics& out, const TechCounts& tech) {
+    out.tech.crossovers = static_cast<int>(tech[TechCountsCategory_Crossovers]);
+    out.tech.footswitches = static_cast<int>(tech[TechCountsCategory_Footswitches]);
+    out.tech.sideswitches = static_cast<int>(tech[TechCountsCategory_Sideswitches]);
+    out.tech.jacks = static_cast<int>(tech[TechCountsCategory_Jacks]);
+    out.tech.brackets = static_cast<int>(tech[TechCountsCategory_Brackets]);
+    out.tech.doublesteps = static_cast<int>(tech[TechCountsCategory_Doublesteps]);
+}
+
+static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Steps* steps, const Song& song) {
+    TimingData* const td = steps->GetTimingData();
+    prepare_steps_for_metrics(steps, td);
+
+    const StepsType st = steps->m_StepsType;
+    const std::string st_str = steps_type_string(st);
+    const std::string diff_str = diff_string(steps->GetDifficulty());
 
     const TechCounts& tech = steps->GetTechCounts(PLAYER_1);
 
-    RadarValues radar = steps->GetRadarValues(PLAYER_1);
-    int holds = static_cast<int>(radar[RadarCategory_Holds]);
-    int mines = static_cast<int>(radar[RadarCategory_Mines]);
-    int rolls = static_cast<int>(radar[RadarCategory_Rolls]);
-    int taps_and_holds = static_cast<int>(radar[RadarCategory_TapsAndHolds]);
-    int notes = static_cast<int>(radar[RadarCategory_Notes]);
-    int lifts = static_cast<int>(radar[RadarCategory_Lifts]);
-    int fakes = static_cast<int>(radar[RadarCategory_Fakes]);
-    int jumps = static_cast<int>(radar[RadarCategory_Jumps]);
-    int hands = static_cast<int>(radar[RadarCategory_Hands]);
-    int quads = static_cast<int>(radar[RadarCategory_Hands]); // quads not separately tracked; reuse hands
+    const RadarValues radar = steps->GetRadarValues(PLAYER_1);
+    const RadarCountsOut radar_counts = get_radar_counts(radar);
 
     ChartMetrics out;
     out.simfile = simfile_path;
@@ -659,51 +754,34 @@ static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Ste
     int stream_measures = 0;
     int break_measures = 0;
     std::vector<StreamSequenceOut> stream_sequences;
-    out.hash = compute_hash_with_lua(simfile_path, st_str, diff_str, steps->GetDescription(), steps->GetTimingData(),
+    out.hash = compute_hash_with_lua(simfile_path, st_str, diff_str, steps->GetDescription(), td,
                                      &out.streams_breakdown, &breakdown_levels, &stream_measures, &break_measures,
                                      &stream_sequences,
                                      &lua_notes_pm, &lua_nps_pm, &lua_equally_spaced, &lua_peak_nps);
     out.steps_type = st_str;
     out.difficulty = diff_str;
     out.meter = steps->GetMeter();
-    out.bpms = bpm_string_from_timing(steps->GetTimingData());
+    out.bpms = bpm_string_from_timing(td);
     get_bpm_ranges_like_simply_love(steps, 1.0, out.bpm_min, out.bpm_max, out.display_bpm_min, out.display_bpm_max,
                                    out.display_bpm);
-    NoteData nd;
-    steps->GetNoteData(nd);
-    float last_beat = nd.GetLastBeat();
-    out.duration_seconds = steps->GetTimingData()->GetElapsedTimeFromBeat(last_beat);
-    std::vector<int> notes_per_measure;
-    std::vector<double> nps_per_measure;
-    if (lua_notes_pm.empty()) {
-        const std::vector<int>& npm = steps->GetNotesPerMeasure(PLAYER_1);
-        notes_per_measure.assign(npm.begin(), npm.end());
+    out.duration_seconds = get_duration_seconds(steps, td);
 
-        const std::vector<float>& nps = steps->GetNpsPerMeasure(PLAYER_1);
-        nps_per_measure.reserve(nps.size());
-        for (float v : nps) nps_per_measure.push_back(static_cast<double>(v));
-    } else {
-        notes_per_measure = std::move(lua_notes_pm);
-        nps_per_measure = std::move(lua_nps_pm);
-    }
-    out.total_steps = static_cast<int>(std::accumulate(notes_per_measure.begin(), notes_per_measure.end(), 0));
-    if (!lua_equally_spaced.empty()) {
-        out.equally_spaced_per_measure = std::move(lua_equally_spaced);
-        out.peak_nps = lua_peak_nps;
-    } else {
-        // Fallback: mark all measures as not guaranteed equally spaced and use computed peak.
-        out.equally_spaced_per_measure.assign(notes_per_measure.size(), false);
-        out.peak_nps = 0.0;
-        for (double v : nps_per_measure) out.peak_nps = std::max(out.peak_nps, v);
-    }
+    const MeasureStatsOut measures = get_measure_stats(
+        steps, std::move(lua_notes_pm), std::move(lua_nps_pm), std::move(lua_equally_spaced), lua_peak_nps);
+    out.total_steps = measures.total_steps;
+    out.notes_per_measure = measures.notes_per_measure;
+    out.nps_per_measure = measures.nps_per_measure;
+    out.equally_spaced_per_measure = measures.equally_spaced_per_measure;
+    out.peak_nps = measures.peak_nps;
+
     out.stream_sequences = std::move(stream_sequences);
-    out.holds = holds;
-    out.mines = mines;
-    out.rolls = rolls;
-    out.taps_and_holds = taps_and_holds;
-    out.notes = notes;
-    out.lifts = lifts;
-    out.fakes = fakes;
+    out.holds = radar_counts.holds;
+    out.mines = radar_counts.mines;
+    out.rolls = radar_counts.rolls;
+    out.taps_and_holds = radar_counts.taps_and_holds;
+    out.notes = radar_counts.notes;
+    out.lifts = radar_counts.lifts;
+    out.fakes = radar_counts.fakes;
     if (breakdown_levels.size() == 4) {
         out.streams_breakdown_level1 = breakdown_levels[1];
         out.streams_breakdown_level2 = breakdown_levels[2];
@@ -711,32 +789,12 @@ static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Ste
     }
     out.total_stream_measures = stream_measures;
     out.total_break_measures = break_measures;
-    out.notes_per_measure = std::move(notes_per_measure);
-    out.nps_per_measure = std::move(nps_per_measure);
-    out.jumps = jumps;
-    out.hands = hands;
-    out.quads = quads;
-    out.tech.crossovers = static_cast<int>(tech[TechCountsCategory_Crossovers]);
-    out.tech.footswitches = static_cast<int>(tech[TechCountsCategory_Footswitches]);
-    out.tech.sideswitches = static_cast<int>(tech[TechCountsCategory_Sideswitches]);
-    out.tech.jacks = static_cast<int>(tech[TechCountsCategory_Jacks]);
-    out.tech.brackets = static_cast<int>(tech[TechCountsCategory_Brackets]);
-    out.tech.doublesteps = static_cast<int>(tech[TechCountsCategory_Doublesteps]);
 
-    TimingData* td = steps->GetTimingData();
-    out.beat0_offset_seconds = static_cast<double>(td->m_fBeat0OffsetInSeconds);
-    out.beat0_group_offset_seconds = static_cast<double>(td->m_fBeat0GroupOffsetInSeconds);
-    out.timing_bpms = timing_segments_to_number_table(td, SEGMENT_BPM);
-    out.timing_stops = timing_segments_to_number_table(td, SEGMENT_STOP);
-    out.timing_delays = timing_segments_to_number_table(td, SEGMENT_DELAY);
-    out.timing_time_signatures = timing_segments_to_number_table(td, SEGMENT_TIME_SIG);
-    out.timing_warps = timing_segments_to_number_table(td, SEGMENT_WARP);
-    out.timing_labels = timing_labels_to_table(td);
-    out.timing_tickcounts = timing_segments_to_number_table(td, SEGMENT_TICKCOUNT);
-    out.timing_combos = timing_segments_to_number_table(td, SEGMENT_COMBO);
-    out.timing_speeds = timing_segments_to_number_table(td, SEGMENT_SPEED);
-    out.timing_scrolls = timing_segments_to_number_table(td, SEGMENT_SCROLL);
-    out.timing_fakes = timing_segments_to_number_table(td, SEGMENT_FAKE);
+    out.jumps = radar_counts.jumps;
+    out.hands = radar_counts.hands;
+    out.quads = radar_counts.quads;
+    fill_tech_counts(out, tech);
+    fill_timing_tables(out, td);
     return out;
 }
 
