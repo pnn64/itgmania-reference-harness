@@ -19,6 +19,7 @@ struct ChartMetrics {
     std::string title;
     std::string subtitle;
     std::string artist;
+    std::string step_artist;
     std::string steps_type;
     std::string difficulty;
     int meter = -1;
@@ -35,6 +36,9 @@ struct ChartMetrics {
     std::vector<double> nps_per_measure;
     std::vector<bool> equally_spaced_per_measure;
     double peak_nps = 0.0;
+    int holds = 0;
+    int mines = 0;
+    int rolls = 0;
     int jumps = 0;
     int hands = 0;
     int quads = 0;

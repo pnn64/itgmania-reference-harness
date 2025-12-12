@@ -519,6 +519,9 @@ static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Ste
     const TechCounts& tech = steps->GetTechCounts(PLAYER_1);
 
     RadarValues radar = steps->GetRadarValues(PLAYER_1);
+    int holds = static_cast<int>(radar[RadarCategory_Holds]);
+    int mines = static_cast<int>(radar[RadarCategory_Mines]);
+    int rolls = static_cast<int>(radar[RadarCategory_Rolls]);
     int jumps = static_cast<int>(radar[RadarCategory_Jumps]);
     int hands = static_cast<int>(radar[RadarCategory_Hands]);
     int quads = static_cast<int>(radar[RadarCategory_Hands]); // quads not separately tracked; reuse hands
@@ -528,6 +531,7 @@ static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Ste
     out.title = song.GetDisplayMainTitle();
     out.subtitle = song.GetDisplaySubTitle();
     out.artist = song.GetDisplayArtist();
+    out.step_artist = steps->GetCredit();
     std::vector<int> lua_notes_pm;
     std::vector<double> lua_nps_pm;
     std::vector<bool> lua_equally_spaced;
@@ -565,10 +569,13 @@ static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Ste
         out.peak_nps = lua_peak_nps;
     } else {
         // Fallback: mark all measures as not guaranteed equally spaced and use computed peak.
-        out.equally_spaced_per_measure.assign(out.notes_per_measure.size(), false);
+        out.equally_spaced_per_measure.assign(notes_per_measure.size(), false);
         out.peak_nps = 0.0;
-        for (double v : out.nps_per_measure) out.peak_nps = std::max(out.peak_nps, v);
+        for (double v : nps_per_measure) out.peak_nps = std::max(out.peak_nps, v);
     }
+    out.holds = holds;
+    out.mines = mines;
+    out.rolls = rolls;
     if (breakdown_levels.size() == 4) {
         out.streams_breakdown_level1 = breakdown_levels[1];
         out.streams_breakdown_level2 = breakdown_levels[2];

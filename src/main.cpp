@@ -19,6 +19,7 @@ static void emit_json_stub(
     std::cout << "  \"title\": \"\",\n";
     std::cout << "  \"subtitle\": \"\",\n";
     std::cout << "  \"artist\": \"\",\n";
+    std::cout << "  \"step_artist\": \"\",\n";
     std::cout << "  \"steps_type\": \"" << steps_type << "\",\n";
     std::cout << "  \"difficulty\": \"" << difficulty << "\",\n";
     std::cout << "  \"meter\": null,\n";
@@ -36,6 +37,9 @@ static void emit_json_stub(
     std::cout << "  \"nps_per_measure\": [],\n";
     std::cout << "  \"equally_spaced_per_measure\": [],\n";
     std::cout << "  \"peak_nps\": null,\n";
+    std::cout << "  \"holds\": null,\n";
+    std::cout << "  \"mines\": null,\n";
+    std::cout << "  \"rolls\": null,\n";
     std::cout << "  \"tech_counts\": {\n";
     std::cout << "    \"crossovers\": 0,\n";
     std::cout << "    \"footswitches\": 0,\n";
@@ -55,6 +59,7 @@ static void emit_chart_json(const ChartMetrics& m, const std::string& indent) {
     std::cout << ind2 << "\"title\": \"" << m.title << "\",\n";
     std::cout << ind2 << "\"subtitle\": \"" << m.subtitle << "\",\n";
     std::cout << ind2 << "\"artist\": \"" << m.artist << "\",\n";
+    std::cout << ind2 << "\"step_artist\": \"" << m.step_artist << "\",\n";
     std::cout << ind2 << "\"steps_type\": \"" << m.steps_type << "\",\n";
     std::cout << ind2 << "\"difficulty\": \"" << m.difficulty << "\",\n";
     std::cout << ind2 << "\"meter\": " << m.meter << ",\n";
@@ -87,6 +92,9 @@ static void emit_chart_json(const ChartMetrics& m, const std::string& indent) {
     }
     std::cout << "],\n";
     std::cout << ind2 << "\"peak_nps\": " << m.peak_nps << ",\n";
+    std::cout << ind2 << "\"holds\": " << m.holds << ",\n";
+    std::cout << ind2 << "\"mines\": " << m.mines << ",\n";
+    std::cout << ind2 << "\"rolls\": " << m.rolls << ",\n";
     std::cout << ind2 << "\"jumps\": " << m.jumps << ",\n";
     std::cout << ind2 << "\"hands\": " << m.hands << ",\n";
     std::cout << ind2 << "\"quads\": " << m.quads << ",\n";
