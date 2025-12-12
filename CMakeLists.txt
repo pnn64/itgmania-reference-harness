@@ -49,7 +49,9 @@ set(HARNESS_SOURCES
   src/itgmania_adapter.cpp
 )
 
-list(APPEND HARNESS_SOURCES src/itgmania_stubs.cpp)
+if(NOT USE_ITGMANIA_PREBUILT)
+  list(APPEND HARNESS_SOURCES src/itgmania_stubs.cpp)
+endif()
 
 add_executable(itgmania-reference-harness ${HARNESS_SOURCES})
 

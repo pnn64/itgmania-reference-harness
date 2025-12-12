@@ -36,6 +36,8 @@
 
 #include <tomcrypt.h>
 #include <cstring>
+#include <cctype>
+#include <cwctype>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -135,6 +137,33 @@ const RString& LocalizedString::GetValue() const { static RString empty; return 
 void LocalizedString::RegisterLocalizer(MakeLocalizer) {}
 void LocalizedString::CreateImpl() {}
 
+// ---------------------------------------------------------------------------
+// Basic string helpers
+#ifndef ITGMANIA_HARNESS_SOURCE
+void MakeLower(char* p, size_t len) {
+    if (!p) return;
+    for (size_t i = 0; i < len && p[i]; ++i) {
+        p[i] = static_cast<char>(std::tolower(static_cast<unsigned char>(p[i])));
+    }
+}
+
+void MakeLower(wchar_t* p, size_t len) {
+    if (!p) return;
+    for (size_t i = 0; i < len && p[i]; ++i) {
+        p[i] = static_cast<wchar_t>(std::towlower(p[i]));
+    }
+}
+
+namespace StdString {
+void ssasn(std::string& dst, const std::string& src) noexcept { dst = src; }
+void ssasn(std::wstring& dst, const std::wstring& src) noexcept { dst = src; }
+void ssasn(std::string& dst, const char* src) noexcept { dst = src ? src : ""; }
+void ssasn(std::wstring& dst, const wchar_t* src) noexcept { dst = src ? src : L""; }
+char sstolower(char ch) noexcept { return (ch >= 'A' && ch <= 'Z') ? static_cast<char>(ch + 'a' - 'A') : ch; }
+wchar_t sstolower(wchar_t ch) noexcept { return (ch >= L'A' && ch <= L'Z') ? static_cast<wchar_t>(ch + L'a' - L'A') : ch; }
+} // namespace StdString
+#endif
+
 RadarValues::RadarValues() { Zero(); }
 void RadarValues::MakeUnknown() { FOREACH_ENUM(RadarCategory, rc) m_Values[rc] = RADAR_VAL_UNKNOWN; }
 void RadarValues::Zero() { FOREACH_ENUM(RadarCategory, rc) m_Values[rc] = 0.0f; }
@@ -145,6 +174,16 @@ void RadarValues::FromString(RString) {}
 ThemeMetric<bool> RadarValues::WRITE_SIMPLE_VALIES("", "");
 ThemeMetric<bool> RadarValues::WRITE_COMPLEX_VALIES("", "");
 void RadarValues::PushSelf(lua_State*) {}
+
+#ifndef ITGMANIA_HARNESS_SOURCE
+TechCounts::TechCounts() { Zero(); }
+void TechCounts::MakeUnknown() { FOREACH_ENUM(TechCountsCategory, tc) m_Values[tc] = TECHCOUNTS_VAL_UNKNOWN; }
+void TechCounts::Zero() { FOREACH_ENUM(TechCountsCategory, tc) m_Values[tc] = 0.0f; }
+RString TechCounts::ToString(int) const { return ""; }
+void TechCounts::FromString(RString) {}
+void TechCounts::PushSelf(lua_State*) {}
+void TechCounts::CalculateTechCountsFromRows(const std::vector<StepParity::Row>&, StepParity::StageLayout&, TechCounts& out) { out.Zero(); }
+#endif
 
 void Attack::GetAttackBeats(const Song*, float& fStartBeat, float& fEndBeat) const { fStartBeat = 0.0f; fEndBeat = 0.0f; }
 void Attack::GetRealtimeAttackBeats(const Song*, const PlayerState*, float& fStartBeat, float& fEndBeat) const { fStartBeat = 0.0f; fEndBeat = 0.0f; }
@@ -174,6 +213,25 @@ RString CryptManager::GetSHA1ForString(RString s) {
 }
 
 int64_t ArchHooks::GetSystemTimeInMicroseconds() { return 0; }
+
+// ---------------------------------------------------------------------------
+// RageTimer minimal implementation
+#ifndef ITGMANIA_HARNESS_SOURCE
+const RageTimer RageZeroTimer;
+
+float RageTimer::Ago() const { return 0.0f; }
+void RageTimer::Touch() { m_secs = 0; m_us = 0; }
+float RageTimer::GetDeltaTime() { Touch(); return 0.0f; }
+double RageTimer::GetTimeSinceStart() { return 0.0; }
+int RageTimer::GetTimeSinceStartSeconds() { return 0; }
+uint64_t RageTimer::GetTimeSinceStartMicroseconds() { return 0; }
+RageTimer RageTimer::Half() const { return *this; }
+RageTimer RageTimer::operator+(float) const { return *this; }
+float RageTimer::operator-(const RageTimer&) const { return 0.0f; }
+bool RageTimer::operator<(const RageTimer& rhs) const {
+    return m_secs < rhs.m_secs || (m_secs == rhs.m_secs && m_us < rhs.m_us);
+}
+#endif
 
 LuaBinding::LuaBinding() = default;
 LuaBinding::~LuaBinding() = default;
@@ -730,6 +788,71 @@ bool MessageManager::IsSubscribedToMessage(IMessageSubscriber*, const RString&) 
 void MessageManager::PushSelf(lua_State*) {}
 
 // ---------------------------------------------------------------------------
+// Minimal chart structures
+#ifndef ITGMANIA_HARNESS_SOURCE
+void DisplayBpms::Add(float f) { vfBpms.push_back(f); }
+float DisplayBpms::GetMin() const {
+    if (vfBpms.empty()) return 0.0f;
+    float out = vfBpms.front();
+    for (float v : vfBpms) if (v < out) out = v;
+    return out;
+}
+float DisplayBpms::GetMax() const {
+    if (vfBpms.empty()) return 0.0f;
+    float out = vfBpms.front();
+    for (float v : vfBpms) if (v > out) out = v;
+    return out;
+}
+float DisplayBpms::GetMaxWithin(float highest) const {
+    float out = GetMax();
+    return out > highest ? highest : out;
+}
+bool DisplayBpms::BpmIsConstant() const { return vfBpms.size() <= 1 || GetMin() == GetMax(); }
+bool DisplayBpms::IsSecret() const { return false; }
+
+TimingData::TimingData(float fOffset)
+    : m_fBeat0OffsetInSeconds(fOffset),
+      m_fBeat0GroupOffsetInSeconds(0.0f) {}
+
+TimingData::~TimingData() {
+    for (auto& vec : m_avpTimingSegments) {
+        for (auto* seg : vec) delete seg;
+        vec.clear();
+    }
+}
+
+template<> NoteData* HiddenPtrTraits<NoteData>::Copy(const NoteData*) { return nullptr; }
+template<> void HiddenPtrTraits<NoteData>::Delete(NoteData*) {}
+
+Steps::Steps(Song* song)
+    : m_Timing(0.0f),
+      m_StepsType(StepsType_Invalid),
+      m_StepsTypeStr(""),
+      m_pSong(song),
+      parent(nullptr),
+      m_bNoteDataIsFilled(false),
+      m_bSavedToDisk(false),
+      m_LoadedFromProfile(ProfileSlot_Invalid),
+      m_iHash(0),
+      m_Difficulty(Difficulty_Invalid),
+      m_iMeter(0),
+      m_bAreCachedRadarValuesJustLoaded(false),
+      m_bAreCachedTechCountsValuesJustLoaded(false),
+      m_AreCachedNpsPerMeasureJustLoaded(false),
+      m_AreCachedNotesPerMeasureJustLoaded(false),
+      m_bIsCachedGrooveStatsHashJustLoaded(false),
+      m_iGrooveStatsHashVersion(0),
+      displayBPMType(DISPLAY_BPM_ACTUAL),
+      specifiedBPMMin(0.0f),
+      specifiedBPMMax(0.0f) {
+    for (auto& rv : m_CachedRadarValues) rv.Zero();
+    for (auto& tc : m_CachedTechCounts) tc.Zero();
+}
+
+Steps::~Steps() = default;
+#endif
+
+// ---------------------------------------------------------------------------
 // Song stubs sufficient for parsing
 Song::Song() : m_SelectionDisplay(SHOW_ALWAYS), m_fMusicSampleStartSeconds(0.0f), m_fMusicSampleLengthSeconds(0.0f),
     m_DisplayBPMType(DISPLAY_BPM_ACTUAL), m_fSpecifiedBPMMin(0.0f), m_fSpecifiedBPMMax(0.0f) {
@@ -792,6 +915,11 @@ bool Song::IsEditAlreadyLoaded(Steps*) const { return false; }
 // ---------------------------------------------------------------------------
 // ScreenMessage helpers (simple mapping)
 
+#ifndef ITGMANIA_HARNESS_SOURCE
+ScreenMessage ScreenMessageHelpers::ToScreenMessage(const RString& name) { return name; }
+RString ScreenMessageHelpers::ScreenMessageToString(ScreenMessage sm) { return sm; }
+#endif
+
 RString RageColor::NormalizeColorString(RString sColor) { return sColor; }
 
 const std::vector<RString>& ActorUtil::GetTypeExtensionList(FileType) {
@@ -809,6 +937,47 @@ const RString SBE_StretchNoLoop = "";
 const RString SBE_StretchRewind = "";
 const RString SBT_CrossFade = "";
 
+#ifndef ITGMANIA_HARNESS_SOURCE
+void XNodeStringValue::GetValue(RString& out) const { out = m_sValue; }
+void XNodeStringValue::GetValue(int& out) const {
+    std::stringstream ss;
+    ss << m_sValue;
+    ss >> out;
+    if (ss.fail()) out = 0;
+}
+void XNodeStringValue::GetValue(float& out) const {
+    std::stringstream ss;
+    ss << m_sValue;
+    ss >> out;
+    if (ss.fail()) out = 0.0f;
+}
+void XNodeStringValue::GetValue(bool& out) const {
+    RString lower = m_sValue;
+    lower.MakeLower();
+    out = (lower == "1" || lower == "true" || lower == "yes" || lower == "on");
+}
+void XNodeStringValue::GetValue(unsigned& out) const {
+    std::stringstream ss;
+    ss << m_sValue;
+    unsigned long tmp = 0;
+    ss >> tmp;
+    out = ss.fail() ? 0u : static_cast<unsigned>(tmp);
+}
+void XNodeStringValue::PushValue(lua_State* L) const { lua_pushstring(L, m_sValue.c_str()); }
+void XNodeStringValue::SetValue(const RString& v) { m_sValue = v; }
+void XNodeStringValue::SetValue(int v) { m_sValue = std::to_string(v).c_str(); }
+void XNodeStringValue::SetValue(float v) {
+    std::ostringstream oss;
+    oss << v;
+    m_sValue = oss.str().c_str();
+}
+void XNodeStringValue::SetValue(unsigned v) { m_sValue = std::to_string(v).c_str(); }
+void XNodeStringValue::SetValueFromStack(lua_State* L) {
+    if (!L) return;
+    const char* s = lua_tostring(L, -1);
+    m_sValue = s ? s : "";
+}
+
 namespace BackgroundUtil {
 void AddBackgroundChange(std::vector<BackgroundChange>&, BackgroundChange) {}
 void SortBackgroundChangesArray(std::vector<BackgroundChange>&) {}
@@ -821,6 +990,84 @@ void GetGlobalBGAnimations(const Song*, const RString&, std::vector<RString>& pa
 void GetGlobalRandomMovies(const Song*, const RString&, std::vector<RString>& paths, std::vector<RString>& names, bool, bool) { paths.clear(); names.clear(); }
 void BakeAllBackgroundChanges(Song*) {}
 }
+
+XNode::XNode() : m_sName("") {}
+XNode::XNode(const RString& sName) : m_sName(sName) {}
+XNode::XNode(const XNode& cpy) : m_sName(cpy.m_sName) {}
+const XNodeValue* XNode::GetAttr(const RString& sAttrName) const {
+    auto it = m_attrs.find(sAttrName);
+    return it != m_attrs.end() ? it->second : nullptr;
+}
+XNodeValue* XNode::GetAttr(const RString& sAttrName) {
+    auto it = m_attrs.find(sAttrName);
+    return it != m_attrs.end() ? it->second : nullptr;
+}
+bool XNode::PushAttrValue(lua_State*, const RString&) const { return false; }
+const XNode* XNode::GetChild(const RString& sName) const {
+    for (auto* child : m_childs) {
+        if (child && child->GetName() == sName) return child;
+    }
+    return nullptr;
+}
+XNode* XNode::GetChild(const RString& sName) { return const_cast<XNode*>(static_cast<const XNode*>(this)->GetChild(sName)); }
+bool XNode::PushChildValue(lua_State*, const RString&) const { return false; }
+XNode* XNode::AppendChild(XNode* node) {
+    if (!node) return nullptr;
+    m_childs.push_back(node);
+    m_children_by_name.emplace(node->GetName(), node);
+    return node;
+}
+bool XNode::RemoveChild(XNode* node, bool bDelete) {
+    if (!node) return false;
+    for (auto it = m_childs.begin(); it != m_childs.end(); ++it) {
+        if (*it == node) {
+            m_children_by_name.erase(node->GetName());
+            if (bDelete) delete node;
+            m_childs.erase(it);
+            return true;
+        }
+    }
+    return false;
+}
+void XNode::RemoveChildFromByName(XNode* node) {
+    if (!node) return;
+    m_children_by_name.erase(node->GetName());
+}
+void XNode::RenameChildInByName(XNode* node) {
+    if (!node) return;
+    RemoveChildFromByName(node);
+    m_children_by_name.emplace(node->GetName(), node);
+}
+XNodeValue* XNode::AppendAttrFrom(const RString& sName, XNodeValue* value, bool bOverwrite) {
+    if (!value) return nullptr;
+    auto it = m_attrs.find(sName);
+    if (it != m_attrs.end()) {
+        if (bOverwrite) {
+            delete it->second;
+            it->second = value;
+        }
+        return it->second;
+    }
+    m_attrs[sName] = value;
+    return value;
+}
+XNodeValue* XNode::AppendAttr(const RString& sName) { return AppendAttrFrom(sName, new XNodeStringValue, true); }
+bool XNode::RemoveAttr(const RString& sName) {
+    auto it = m_attrs.find(sName);
+    if (it == m_attrs.end()) return false;
+    delete it->second;
+    m_attrs.erase(it);
+    return true;
+}
+void XNode::Clear() { Free(); }
+void XNode::Free() {
+    for (auto* child : m_childs) delete child;
+    m_childs.clear();
+    m_children_by_name.clear();
+    for (auto& kv : m_attrs) delete kv.second;
+    m_attrs.clear();
+}
+#endif
 
 IniFile::IniFile() = default;
 bool IniFile::ReadFile(const RString&) { return false; }
@@ -840,6 +1087,32 @@ void GetApplicableFiles(const RString&, std::vector<RString>& out) { out.clear()
 bool LoadFromDir(const RString&, Song&) { return false; }
 bool LoadNoteDataFromSimfile(const RString&, Steps&) { return false; }
 }
+
+#ifndef ITGMANIA_HARNESS_SOURCE
+namespace StringConversion {
+template<> bool FromString<float>(const RString& sValue, float& out) {
+    std::stringstream ss;
+    ss << sValue;
+    ss >> out;
+    return !ss.fail() && ss.eof();
+}
+template<> bool FromString<bool>(const RString& sValue, bool& out) {
+    RString lower = sValue;
+    lower.MakeLower();
+    if (lower == "1" || lower == "true" || lower == "yes" || lower == "on") { out = true; return true; }
+    if (lower == "0" || lower == "false" || lower == "no" || lower == "off") { out = false; return true; }
+    return false;
+}
+template<> RString ToString<float>(const float& value) {
+    std::ostringstream oss;
+    oss << value;
+    return oss.str().c_str();
+}
+template<> RString ToString<bool>(const bool& value) {
+    return value ? "true" : "false";
+}
+} // namespace StringConversion
+#endif
 
 // ---------------------------------------------------------------------------
 // Simple initialization helper to create globals
@@ -862,6 +1135,10 @@ static void init_globals_once() {
 struct GlobalInit {
     GlobalInit() { init_globals_once(); }
 } _globalInit;
+
+#ifndef ITGMANIA_HARNESS_SOURCE
+void init_itgmania_runtime(int, char**) { init_globals_once(); }
+#endif
 
 extern "C" int luaL_pushtype(lua_State* L, int n) {
     const char* t = lua_typename(L, lua_type(L, n));
