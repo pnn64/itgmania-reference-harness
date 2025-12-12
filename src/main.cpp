@@ -1,0 +1,114 @@
+#include <iostream>
+#include <map>
+#include <string>
+#include <vector>
+
+#include "itgmania_adapter.h"
+
+static void print_usage() {
+    std::cerr << "Usage: itgmania-reference-harness <simfile> [steps-type] [difficulty]\n";
+}
+
+static void emit_json_stub(
+    const std::string& simfile,
+    const std::string& steps_type,
+    const std::string& difficulty) {
+    std::cout << "{\n";
+    std::cout << "  \"status\": \"stub\",\n";
+    std::cout << "  \"simfile\": \"" << simfile << "\",\n";
+    std::cout << "  \"steps_type\": \"" << steps_type << "\",\n";
+    std::cout << "  \"difficulty\": \"" << difficulty << "\",\n";
+    std::cout << "  \"meter\": null,\n";
+    std::cout << "  \"bpms\": \"\",\n";
+    std::cout << "  \"hash\": \"\",\n";
+    std::cout << "  \"notes_per_measure\": [],\n";
+    std::cout << "  \"nps_per_measure\": [],\n";
+    std::cout << "  \"tech_counts\": {\n";
+    std::cout << "    \"crossovers\": 0,\n";
+    std::cout << "    \"footswitches\": 0,\n";
+    std::cout << "    \"sideswitches\": 0,\n";
+    std::cout << "    \"jacks\": 0,\n";
+    std::cout << "    \"brackets\": 0\n";
+    std::cout << "  }\n";
+    std::cout << "}\n";
+}
+
+static void emit_chart_json(const ChartMetrics& m, const std::string& indent) {
+    const std::string ind2 = indent + "  ";
+    std::cout << indent << "{\n";
+    std::cout << ind2 << "\"status\": \"ok\",\n";
+    std::cout << ind2 << "\"simfile\": \"" << m.simfile << "\",\n";
+    std::cout << ind2 << "\"steps_type\": \"" << m.steps_type << "\",\n";
+    std::cout << ind2 << "\"difficulty\": \"" << m.difficulty << "\",\n";
+    std::cout << ind2 << "\"meter\": " << m.meter << ",\n";
+    std::cout << ind2 << "\"bpms\": \"" << m.bpms << "\",\n";
+    std::cout << ind2 << "\"hash\": \"" << m.hash << "\",\n";
+    std::cout << ind2 << "\"notes_per_measure\": [";
+    for (size_t i = 0; i < m.notes_per_measure.size(); ++i) {
+        if (i) std::cout << ", ";
+        std::cout << m.notes_per_measure[i];
+    }
+    std::cout << "],\n";
+    std::cout << ind2 << "\"nps_per_measure\": [";
+    for (size_t i = 0; i < m.nps_per_measure.size(); ++i) {
+        if (i) std::cout << ", ";
+        std::cout << m.nps_per_measure[i];
+    }
+    std::cout << "],\n";
+    std::cout << ind2 << "\"jumps\": " << m.jumps << ",\n";
+    std::cout << ind2 << "\"hands\": " << m.hands << ",\n";
+    std::cout << ind2 << "\"quads\": " << m.quads << ",\n";
+    std::cout << ind2 << "\"tech_counts\": {\n";
+    std::cout << ind2 << "  \"crossovers\": " << m.tech.crossovers << ",\n";
+    std::cout << ind2 << "  \"footswitches\": " << m.tech.footswitches << ",\n";
+    std::cout << ind2 << "  \"sideswitches\": " << m.tech.sideswitches << ",\n";
+    std::cout << ind2 << "  \"jacks\": " << m.tech.jacks << ",\n";
+    std::cout << ind2 << "  \"brackets\": " << m.tech.brackets << "\n";
+    std::cout << ind2 << "}\n";
+    std::cout << indent << "}";
+}
+
+static void emit_json(const ChartMetrics& m) {
+    emit_chart_json(m, "");
+    std::cout << "\n";
+}
+
+static void emit_json_array(const std::vector<ChartMetrics>& charts) {
+    std::cout << "[\n";
+    for (size_t i = 0; i < charts.size(); ++i) {
+        emit_chart_json(charts[i], "  ");
+        if (i + 1 < charts.size()) std::cout << ",";
+        std::cout << "\n";
+    }
+    std::cout << "]\n";
+}
+
+int main(int argc, char** argv) {
+    std::fprintf(stderr, "enter main\n");
+    if (argc < 2) {
+        print_usage();
+        return 1;
+    }
+
+    const std::string simfile = argv[1];
+    const std::string steps_type = (argc >= 3) ? argv[2] : "";
+    const std::string difficulty = (argc >= 4) ? argv[3] : "";
+
+    init_itgmania_runtime(argc, argv);
+
+    if (steps_type.empty() && difficulty.empty()) {
+        auto charts = parse_all_charts_with_itgmania(simfile, "", "", "");
+        if (!charts.empty()) {
+            emit_json_array(charts);
+            return 0;
+        }
+    }
+
+    if (auto parsed = parse_chart_with_itgmania(simfile, steps_type, difficulty, "")) {
+        emit_json(*parsed);
+    } else {
+        emit_json_stub(simfile, steps_type, difficulty);
+    }
+
+    return 0;
+}
