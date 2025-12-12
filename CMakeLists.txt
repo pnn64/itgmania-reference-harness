@@ -5,25 +5,43 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-option(ITGMANIA_ROOT "Path to the ITGmania source tree" "${CMAKE_CURRENT_LIST_DIR}/../../itgmania")
+set(ITGMANIA_ROOT "${CMAKE_CURRENT_LIST_DIR}/src/extern/itgmania" CACHE PATH "Path to the ITGmania source tree (defaults to the vendored submodule)")
 option(USE_ITGMANIA_SOURCES "Attempt to compile against ITGmania parsing sources" OFF)
 option(USE_ITGMANIA_PREBUILT "Link against a prebuilt ITGmania static/shared library" OFF)
-option(ITGMANIA_BUILD_DIR "Path to an existing ITGmania build directory (for generated headers like config.hpp)" "")
+set(ITGMANIA_BUILD_DIR "" CACHE PATH "Path to an existing ITGmania build directory (for generated headers like config.hpp)")
 set(ITGMANIA_LIB "" CACHE FILEPATH "Path to a prebuilt ITGmania library (if USE_ITGMANIA_PREBUILT=ON)")
 set(ITGMANIA_EXTERN_DIR "" CACHE PATH "Path to ITGmania extern build products (auto-detected when possible)")
+
+if(NOT ITGMANIA_BUILD_DIR)
+  if(EXISTS "${ITGMANIA_ROOT}/Build")
+    set(ITGMANIA_BUILD_DIR "${ITGMANIA_ROOT}/Build" CACHE PATH "Path to an existing ITGmania build directory (for generated headers like config.hpp)" FORCE)
+  elseif(EXISTS "${ITGMANIA_ROOT}/build")
+    set(ITGMANIA_BUILD_DIR "${ITGMANIA_ROOT}/build" CACHE PATH "Path to an existing ITGmania build directory (for generated headers like config.hpp)" FORCE)
+  endif()
+endif()
+
+if(NOT ITGMANIA_EXTERN_DIR AND ITGMANIA_BUILD_DIR)
+  set(ITGMANIA_EXTERN_DIR "${ITGMANIA_BUILD_DIR}/extern" CACHE PATH "Path to ITGmania extern build products (auto-detected when possible)" FORCE)
+endif()
 
 if(NOT EXISTS "${ITGMANIA_ROOT}/src")
   message(WARNING "ITGMANIA_ROOT does not look valid: ${ITGMANIA_ROOT}")
 endif()
 
+set(ITGMANIA_EXTERN_HINT_DIRS
+  "${ITGMANIA_EXTERN_DIR}"
+  "${ITGMANIA_ROOT}/Build/extern"
+  "${ITGMANIA_ROOT}/build/extern"
+)
+
 find_library(TOMCRYPT_LIB NAMES tomcrypt
-  HINTS "${ITGMANIA_ROOT}/build/extern" "${ITGMANIA_ROOT}/extern/libtomcrypt" "${ITGMANIA_ROOT}/extern/libtomcrypt/lib")
+  HINTS ${ITGMANIA_EXTERN_HINT_DIRS} "${ITGMANIA_ROOT}/extern/libtomcrypt" "${ITGMANIA_ROOT}/extern/libtomcrypt/lib")
 find_library(TOMMATH_LIB NAMES tommath
-  HINTS "${ITGMANIA_ROOT}/build/extern" "${ITGMANIA_ROOT}/extern/libtommath" "${ITGMANIA_ROOT}/extern/libtommath/lib")
+  HINTS ${ITGMANIA_EXTERN_HINT_DIRS} "${ITGMANIA_ROOT}/extern/libtommath" "${ITGMANIA_ROOT}/extern/libtommath/lib")
 find_library(PCRE_LIB NAMES pcre
-  HINTS "${ITGMANIA_ROOT}/build/extern" "${ITGMANIA_ROOT}/extern/pcre" "${ITGMANIA_ROOT}/extern/pcre/lib")
+  HINTS ${ITGMANIA_EXTERN_HINT_DIRS} "${ITGMANIA_ROOT}/extern/pcre" "${ITGMANIA_ROOT}/extern/pcre/lib")
 find_library(LUA_LIB NAMES lua5.1 lua51 lua
-  HINTS "${ITGMANIA_ROOT}/build/extern" "${ITGMANIA_ROOT}/extern/lua-5.1" "${ITGMANIA_ROOT}/extern/lua-5.1/lib")
+  HINTS ${ITGMANIA_EXTERN_HINT_DIRS} "${ITGMANIA_ROOT}/extern/lua-5.1" "${ITGMANIA_ROOT}/extern/lua-5.1/lib")
 find_library(JSONCPP_LIB NAMES jsoncpp)
 
 set(HARNESS_SOURCES
@@ -42,6 +60,10 @@ target_include_directories(itgmania-reference-harness PRIVATE
   "${ITGMANIA_ROOT}/extern/libtomcrypt/src/headers"
   "${ITGMANIA_ROOT}/extern/pcre"
   "${ITGMANIA_ROOT}/extern/miniz"
+  ${ITGMANIA_BUILD_DIR}/generated/src
+  ${ITGMANIA_BUILD_DIR}
+  ${ITGMANIA_ROOT}/Build/generated/src
+  ${ITGMANIA_ROOT}/Build
   ${ITGMANIA_ROOT}/build/generated/src
   ${ITGMANIA_ROOT}/build
 )
