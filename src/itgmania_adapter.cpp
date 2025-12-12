@@ -135,6 +135,54 @@ static std::string bpm_string_from_timing(TimingData* td) {
     return join(",", bpmStrings);
 }
 
+static std::string format_bpm_like_simply_love(double bpm, double music_rate) {
+    if (music_rate == 1.0) {
+        return ssprintf("%.0f", bpm);
+    }
+    std::string s = ssprintf("%.1f", bpm);
+    if (s.size() >= 2 && s.compare(s.size() - 2, 2, ".0") == 0) {
+        s.resize(s.size() - 2);
+    }
+    return s;
+}
+
+static std::string stringify_display_bpms_like_simply_love(double bpm_min, double bpm_max, double music_rate) {
+    const std::string lo = format_bpm_like_simply_love(bpm_min, music_rate);
+    const std::string hi = format_bpm_like_simply_love(bpm_max, music_rate);
+    if (bpm_min == bpm_max) return lo;
+    return lo + " - " + hi;
+}
+
+static void get_bpm_ranges_like_simply_love(
+    Steps* steps,
+    double music_rate,
+    double& out_actual_min,
+    double& out_actual_max,
+    double& out_display_min,
+    double& out_display_max,
+    std::string& out_display_str) {
+    float actual_min = 0.0f;
+    float actual_max = 0.0f;
+    steps->GetTimingData()->GetActualBPM(actual_min, actual_max);
+
+    DisplayBpms disp;
+    steps->GetDisplayBpms(disp);
+    float display_min = disp.GetMin();
+    float display_max = disp.GetMax();
+
+    // Match Simply Love: if DISPLAYBPM values are <= 0, use actual BPMs instead.
+    if (display_min <= 0.0f || display_max <= 0.0f) {
+        display_min = actual_min;
+        display_max = actual_max;
+    }
+
+    out_actual_min = static_cast<double>(actual_min);
+    out_actual_max = static_cast<double>(actual_max);
+    out_display_min = static_cast<double>(display_min) * music_rate;
+    out_display_max = static_cast<double>(display_max) * music_rate;
+    out_display_str = stringify_display_bpms_like_simply_love(out_display_min, out_display_max, music_rate);
+}
+
 static bool load_song(const std::string& simfile_path, Song& song) {
     RString ext = GetExtension(simfile_path);
     ext.MakeLower();
@@ -546,6 +594,8 @@ static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Ste
     out.difficulty = diff_str;
     out.meter = steps->GetMeter();
     out.bpms = bpm_string_from_timing(steps->GetTimingData());
+    get_bpm_ranges_like_simply_love(steps, 1.0, out.bpm_min, out.bpm_max, out.display_bpm_min, out.display_bpm_max,
+                                   out.display_bpm);
     NoteData nd;
     steps->GetNoteData(nd);
     float last_beat = nd.GetLastBeat();

@@ -24,6 +24,11 @@ struct ChartMetrics {
     std::string difficulty;
     int meter = -1;
     std::string bpms;
+    double bpm_min = 0.0;
+    double bpm_max = 0.0;
+    std::string display_bpm;
+    double display_bpm_min = 0.0;
+    double display_bpm_max = 0.0;
     double duration_seconds = 0.0;
     std::string streams_breakdown;
     std::string streams_breakdown_level1;

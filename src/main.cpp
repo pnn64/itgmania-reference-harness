@@ -24,6 +24,11 @@ static void emit_json_stub(
     std::cout << "  \"difficulty\": \"" << difficulty << "\",\n";
     std::cout << "  \"meter\": null,\n";
     std::cout << "  \"bpms\": \"\",\n";
+    std::cout << "  \"bpm_min\": null,\n";
+    std::cout << "  \"bpm_max\": null,\n";
+    std::cout << "  \"display_bpm\": \"\",\n";
+    std::cout << "  \"display_bpm_min\": null,\n";
+    std::cout << "  \"display_bpm_max\": null,\n";
     std::cout << "  \"hash\": \"\",\n";
     std::cout << "  \"duration_seconds\": null,\n";
     std::cout << "  \"streams_breakdown\": \"\",\n";
@@ -64,6 +69,11 @@ static void emit_chart_json(const ChartMetrics& m, const std::string& indent) {
     std::cout << ind2 << "\"difficulty\": \"" << m.difficulty << "\",\n";
     std::cout << ind2 << "\"meter\": " << m.meter << ",\n";
     std::cout << ind2 << "\"bpms\": \"" << m.bpms << "\",\n";
+    std::cout << ind2 << "\"bpm_min\": " << m.bpm_min << ",\n";
+    std::cout << ind2 << "\"bpm_max\": " << m.bpm_max << ",\n";
+    std::cout << ind2 << "\"display_bpm\": \"" << m.display_bpm << "\",\n";
+    std::cout << ind2 << "\"display_bpm_min\": " << m.display_bpm_min << ",\n";
+    std::cout << ind2 << "\"display_bpm_max\": " << m.display_bpm_max << ",\n";
     std::cout << ind2 << "\"hash\": \"" << m.hash << "\",\n";
     std::cout << ind2 << "\"duration_seconds\": " << m.duration_seconds << ",\n";
     std::cout << ind2 << "\"streams_breakdown\": \"" << m.streams_breakdown << "\",\n";
