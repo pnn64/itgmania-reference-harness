@@ -10,15 +10,19 @@ struct TechCountsOut {
     int sideswitches = 0;
     int jacks = 0;
     int brackets = 0;
+    int doublesteps = 0;
 };
 
 struct ChartMetrics {
     std::string simfile;
-    std::string hash;
+    std::string title;
+    std::string subtitle;
+    std::string artist;
     std::string steps_type;
     std::string difficulty;
     int meter = -1;
     std::string bpms;
+    int total_steps = 0;
     std::vector<int> notes_per_measure;
     std::vector<double> nps_per_measure;
     int jumps = 0;

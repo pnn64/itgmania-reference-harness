@@ -7,6 +7,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <numeric>
 #include <filesystem>
 #include <optional>
 
@@ -146,7 +147,7 @@ static bool load_song(const std::string& simfile_path, Song& song) {
     return false;
 }
 
-static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Steps* steps) {
+static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Steps* steps, const Song& song) {
     steps->GetTimingData()->TidyUpData(false);
     steps->CalculateStepStats(0.0f);
     steps->CalculateGrooveStatsHash();
@@ -175,11 +176,14 @@ static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Ste
 
     ChartMetrics out;
     out.simfile = simfile_path;
-    out.hash = steps->GetGrooveStatsHash();
+    out.title = song.GetDisplayMainTitle();
+    out.subtitle = song.GetDisplaySubTitle();
+    out.artist = song.GetDisplayArtist();
     out.steps_type = st_str;
     out.difficulty = diff_str;
     out.meter = steps->GetMeter();
     out.bpms = bpm_string_from_timing(steps->GetTimingData());
+    out.total_steps = static_cast<int>(std::accumulate(notes_per_measure.begin(), notes_per_measure.end(), 0));
     out.notes_per_measure = std::move(notes_per_measure);
     out.nps_per_measure = std::move(nps_per_measure);
     out.jumps = jumps;
@@ -190,6 +194,7 @@ static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Ste
     out.tech.sideswitches = static_cast<int>(tech[TechCountsCategory_Sideswitches]);
     out.tech.jacks = static_cast<int>(tech[TechCountsCategory_Jacks]);
     out.tech.brackets = static_cast<int>(tech[TechCountsCategory_Brackets]);
+    out.tech.doublesteps = static_cast<int>(tech[TechCountsCategory_Doublesteps]);
     return out;
 }
 
@@ -236,7 +241,7 @@ std::optional<ChartMetrics> parse_chart_with_itgmania(
         return std::nullopt;
     }
 
-    return build_metrics_for_steps(simfile_path, steps);
+    return build_metrics_for_steps(simfile_path, steps, song);
 }
 
 std::vector<ChartMetrics> parse_all_charts_with_itgmania(
@@ -265,7 +270,7 @@ std::vector<ChartMetrics> parse_all_charts_with_itgmania(
         if (!difficulty_req.empty() && diff_str != difficulty_req) continue;
         if (steps->GetDifficulty() == Difficulty_Edit && !description_req.empty() && steps->GetDescription() != description_req) continue;
 
-        out.push_back(build_metrics_for_steps(simfile_path, steps));
+        out.push_back(build_metrics_for_steps(simfile_path, steps, song));
     }
 
     return out;

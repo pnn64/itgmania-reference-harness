@@ -883,6 +883,10 @@ void Song::AddBackgroundChange(BackgroundLayer, BackgroundChange) {}
 void Song::AddForegroundChange(BackgroundChange) {}
 bool Song::HasSignificantBpmChangesOrStops() const { return false; }
 void Song::GetDisplayBpms(DisplayBpms& bpms) const { bpms.Add(m_fSpecifiedBPMMin); bpms.Add(m_fSpecifiedBPMMax); }
+RString Song::GetDisplayMainTitle() const { return m_sMainTitleTranslit.empty() ? m_sMainTitle : m_sMainTitleTranslit; }
+RString Song::GetDisplaySubTitle() const { return m_sSubTitleTranslit.empty() ? m_sSubTitle : m_sSubTitleTranslit; }
+RString Song::GetDisplayArtist() const { return m_sArtistTranslit.empty() ? m_sArtist : m_sArtistTranslit; }
+RString Song::GetMainTitle() const { return m_sMainTitle; }
 RString Song::GetSongAssetPath(RString sPath, const RString& sSongPath) {
     if (sPath.empty()) return sPath;
     if (std::filesystem::path(sPath.c_str()).is_absolute()) return sPath;

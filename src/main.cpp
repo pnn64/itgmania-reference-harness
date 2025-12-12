@@ -16,11 +16,14 @@ static void emit_json_stub(
     std::cout << "{\n";
     std::cout << "  \"status\": \"stub\",\n";
     std::cout << "  \"simfile\": \"" << simfile << "\",\n";
+    std::cout << "  \"title\": \"\",\n";
+    std::cout << "  \"subtitle\": \"\",\n";
+    std::cout << "  \"artist\": \"\",\n";
     std::cout << "  \"steps_type\": \"" << steps_type << "\",\n";
     std::cout << "  \"difficulty\": \"" << difficulty << "\",\n";
     std::cout << "  \"meter\": null,\n";
     std::cout << "  \"bpms\": \"\",\n";
-    std::cout << "  \"hash\": \"\",\n";
+    std::cout << "  \"total_steps\": null,\n";
     std::cout << "  \"notes_per_measure\": [],\n";
     std::cout << "  \"nps_per_measure\": [],\n";
     std::cout << "  \"tech_counts\": {\n";
@@ -28,7 +31,8 @@ static void emit_json_stub(
     std::cout << "    \"footswitches\": 0,\n";
     std::cout << "    \"sideswitches\": 0,\n";
     std::cout << "    \"jacks\": 0,\n";
-    std::cout << "    \"brackets\": 0\n";
+    std::cout << "    \"brackets\": 0,\n";
+    std::cout << "    \"doublesteps\": 0\n";
     std::cout << "  }\n";
     std::cout << "}\n";
 }
@@ -38,11 +42,14 @@ static void emit_chart_json(const ChartMetrics& m, const std::string& indent) {
     std::cout << indent << "{\n";
     std::cout << ind2 << "\"status\": \"ok\",\n";
     std::cout << ind2 << "\"simfile\": \"" << m.simfile << "\",\n";
+    std::cout << ind2 << "\"title\": \"" << m.title << "\",\n";
+    std::cout << ind2 << "\"subtitle\": \"" << m.subtitle << "\",\n";
+    std::cout << ind2 << "\"artist\": \"" << m.artist << "\",\n";
     std::cout << ind2 << "\"steps_type\": \"" << m.steps_type << "\",\n";
     std::cout << ind2 << "\"difficulty\": \"" << m.difficulty << "\",\n";
     std::cout << ind2 << "\"meter\": " << m.meter << ",\n";
     std::cout << ind2 << "\"bpms\": \"" << m.bpms << "\",\n";
-    std::cout << ind2 << "\"hash\": \"" << m.hash << "\",\n";
+    std::cout << ind2 << "\"total_steps\": " << m.total_steps << ",\n";
     std::cout << ind2 << "\"notes_per_measure\": [";
     for (size_t i = 0; i < m.notes_per_measure.size(); ++i) {
         if (i) std::cout << ", ";
@@ -63,7 +70,8 @@ static void emit_chart_json(const ChartMetrics& m, const std::string& indent) {
     std::cout << ind2 << "  \"footswitches\": " << m.tech.footswitches << ",\n";
     std::cout << ind2 << "  \"sideswitches\": " << m.tech.sideswitches << ",\n";
     std::cout << ind2 << "  \"jacks\": " << m.tech.jacks << ",\n";
-    std::cout << ind2 << "  \"brackets\": " << m.tech.brackets << "\n";
+    std::cout << ind2 << "  \"brackets\": " << m.tech.brackets << ",\n";
+    std::cout << ind2 << "  \"doublesteps\": " << m.tech.doublesteps << "\n";
     std::cout << ind2 << "}\n";
     std::cout << indent << "}";
 }
