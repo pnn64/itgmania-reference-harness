@@ -441,6 +441,10 @@ static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Ste
     out.difficulty = diff_str;
     out.meter = steps->GetMeter();
     out.bpms = bpm_string_from_timing(steps->GetTimingData());
+    NoteData nd;
+    steps->GetNoteData(nd);
+    float last_beat = nd.GetLastBeat();
+    out.duration_seconds = steps->GetTimingData()->GetElapsedTimeFromBeat(last_beat);
     out.total_steps = static_cast<int>(std::accumulate(notes_per_measure.begin(), notes_per_measure.end(), 0));
     out.notes_per_measure = std::move(notes_per_measure);
     out.nps_per_measure = std::move(nps_per_measure);

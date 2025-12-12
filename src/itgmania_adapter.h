@@ -23,6 +23,7 @@ struct ChartMetrics {
     std::string difficulty;
     int meter = -1;
     std::string bpms;
+    double duration_seconds = 0.0;
     int total_steps = 0;
     std::vector<int> notes_per_measure;
     std::vector<double> nps_per_measure;
