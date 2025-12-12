@@ -73,11 +73,24 @@ Parse a specific chart:
 ./build/itgmania-reference-harness path/to/song.sm dance-single challenge
 ```
 
+Parse all Edit charts for a steps type:
+
+```bash
+./build/itgmania-reference-harness path/to/song.sm dance-single edit
+```
+
+Parse a specific Edit chart (use `description` to disambiguate):
+
+```bash
+./build/itgmania-reference-harness path/to/song.sm dance-single edit "My Edit Description"
+```
+
 Notes:
 
 - Difficulty names use ITGMania/StepMania’s enums (`beginner`, `easy`, `medium`, `hard`, `challenge`, `edit`).
+- Edit charts can have multiple entries; use the `description` field to identify/select a specific one.
 - If the requested chart isn’t found, the tool prints a JSON stub (`"status": "stub"`).
-- JSON is written to stdout; some debug text may be written to stderr (e.g. `enter main`).
+- JSON is written to stdout.
 
 ## Output Format
 
@@ -113,11 +126,6 @@ The CLI prints either:
 | `speeds` | `[beat, ratio, delay, unit]` (`unit`: `0=beats`, `1=seconds`) |
 | `scrolls` | `[beat, ratio]` |
 | `fakes` | `[beat, length_beats]` |
-
-## Known Limitations
-
-- JSON strings are printed without escaping; quotes in song titles/credits can produce invalid JSON.
-- The adapter supports selecting edit charts by description, but the CLI currently doesn’t expose a `description` argument.
 
 ## License
 

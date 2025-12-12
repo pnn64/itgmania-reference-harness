@@ -31,6 +31,7 @@ struct ChartMetrics {
     std::string subtitle;
     std::string artist;
     std::string step_artist;
+    std::string description;
     std::string steps_type;
     std::string difficulty;
     int meter = -1;

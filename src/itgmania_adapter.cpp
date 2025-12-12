@@ -650,6 +650,7 @@ static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Ste
     out.subtitle = song.GetDisplaySubTitle();
     out.artist = song.GetDisplayArtist();
     out.step_artist = steps->GetCredit();
+    out.description = steps->GetDescription();
     std::vector<int> lua_notes_pm;
     std::vector<double> lua_nps_pm;
     std::vector<bool> lua_equally_spaced;

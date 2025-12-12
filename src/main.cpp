@@ -1,9 +1,36 @@
 #include <iostream>
 #include <map>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "itgmania_adapter.h"
+
+static std::string json_escape(std::string_view s) {
+    std::string out;
+    out.reserve(s.size());
+    for (unsigned char uc : s) {
+        switch (uc) {
+            case '\\': out += "\\\\"; break;
+            case '"': out += "\\\""; break;
+            case '\b': out += "\\b"; break;
+            case '\f': out += "\\f"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default:
+                if (uc < 0x20) {
+                    static const char* hex = "0123456789abcdef";
+                    out += "\\u00";
+                    out.push_back(hex[(uc >> 4) & 0x0F]);
+                    out.push_back(hex[uc & 0x0F]);
+                } else {
+                    out.push_back(static_cast<char>(uc));
+                }
+        }
+    }
+    return out;
+}
 
 static void emit_number_table(const std::vector<std::vector<double>>& table) {
     std::cout << "[";
@@ -23,13 +50,13 @@ static void emit_labels_table(const std::vector<TimingLabelOut>& labels) {
     std::cout << "[";
     for (size_t i = 0; i < labels.size(); ++i) {
         if (i) std::cout << ", ";
-        std::cout << "[" << labels[i].beat << ", \"" << labels[i].label << "\"]";
+        std::cout << "[" << labels[i].beat << ", \"" << json_escape(labels[i].label) << "\"]";
     }
     std::cout << "]";
 }
 
 static void print_usage() {
-    std::cerr << "Usage: itgmania-reference-harness <simfile> [steps-type] [difficulty]\n";
+    std::cerr << "Usage: itgmania-reference-harness <simfile> [steps-type] [difficulty] [description]\n";
 }
 
 static void emit_json_stub(
@@ -38,13 +65,14 @@ static void emit_json_stub(
     const std::string& difficulty) {
     std::cout << "{\n";
     std::cout << "  \"status\": \"stub\",\n";
-    std::cout << "  \"simfile\": \"" << simfile << "\",\n";
+    std::cout << "  \"simfile\": \"" << json_escape(simfile) << "\",\n";
     std::cout << "  \"title\": \"\",\n";
     std::cout << "  \"subtitle\": \"\",\n";
     std::cout << "  \"artist\": \"\",\n";
     std::cout << "  \"step_artist\": \"\",\n";
-    std::cout << "  \"steps_type\": \"" << steps_type << "\",\n";
-    std::cout << "  \"difficulty\": \"" << difficulty << "\",\n";
+    std::cout << "  \"description\": \"\",\n";
+    std::cout << "  \"steps_type\": \"" << json_escape(steps_type) << "\",\n";
+    std::cout << "  \"difficulty\": \"" << json_escape(difficulty) << "\",\n";
     std::cout << "  \"meter\": null,\n";
     std::cout << "  \"bpms\": \"\",\n";
     std::cout << "  \"bpm_min\": null,\n";
@@ -106,26 +134,27 @@ static void emit_chart_json(const ChartMetrics& m, const std::string& indent) {
     const std::string ind2 = indent + "  ";
     std::cout << indent << "{\n";
     std::cout << ind2 << "\"status\": \"ok\",\n";
-    std::cout << ind2 << "\"simfile\": \"" << m.simfile << "\",\n";
-    std::cout << ind2 << "\"title\": \"" << m.title << "\",\n";
-    std::cout << ind2 << "\"subtitle\": \"" << m.subtitle << "\",\n";
-    std::cout << ind2 << "\"artist\": \"" << m.artist << "\",\n";
-    std::cout << ind2 << "\"step_artist\": \"" << m.step_artist << "\",\n";
-    std::cout << ind2 << "\"steps_type\": \"" << m.steps_type << "\",\n";
-    std::cout << ind2 << "\"difficulty\": \"" << m.difficulty << "\",\n";
+    std::cout << ind2 << "\"simfile\": \"" << json_escape(m.simfile) << "\",\n";
+    std::cout << ind2 << "\"title\": \"" << json_escape(m.title) << "\",\n";
+    std::cout << ind2 << "\"subtitle\": \"" << json_escape(m.subtitle) << "\",\n";
+    std::cout << ind2 << "\"artist\": \"" << json_escape(m.artist) << "\",\n";
+    std::cout << ind2 << "\"step_artist\": \"" << json_escape(m.step_artist) << "\",\n";
+    std::cout << ind2 << "\"description\": \"" << json_escape(m.description) << "\",\n";
+    std::cout << ind2 << "\"steps_type\": \"" << json_escape(m.steps_type) << "\",\n";
+    std::cout << ind2 << "\"difficulty\": \"" << json_escape(m.difficulty) << "\",\n";
     std::cout << ind2 << "\"meter\": " << m.meter << ",\n";
-    std::cout << ind2 << "\"bpms\": \"" << m.bpms << "\",\n";
+    std::cout << ind2 << "\"bpms\": \"" << json_escape(m.bpms) << "\",\n";
     std::cout << ind2 << "\"bpm_min\": " << m.bpm_min << ",\n";
     std::cout << ind2 << "\"bpm_max\": " << m.bpm_max << ",\n";
-    std::cout << ind2 << "\"display_bpm\": \"" << m.display_bpm << "\",\n";
+    std::cout << ind2 << "\"display_bpm\": \"" << json_escape(m.display_bpm) << "\",\n";
     std::cout << ind2 << "\"display_bpm_min\": " << m.display_bpm_min << ",\n";
     std::cout << ind2 << "\"display_bpm_max\": " << m.display_bpm_max << ",\n";
-    std::cout << ind2 << "\"hash\": \"" << m.hash << "\",\n";
+    std::cout << ind2 << "\"hash\": \"" << json_escape(m.hash) << "\",\n";
     std::cout << ind2 << "\"duration_seconds\": " << m.duration_seconds << ",\n";
-    std::cout << ind2 << "\"streams_breakdown\": \"" << m.streams_breakdown << "\",\n";
-    std::cout << ind2 << "\"streams_breakdown_level1\": \"" << m.streams_breakdown_level1 << "\",\n";
-    std::cout << ind2 << "\"streams_breakdown_level2\": \"" << m.streams_breakdown_level2 << "\",\n";
-    std::cout << ind2 << "\"streams_breakdown_level3\": \"" << m.streams_breakdown_level3 << "\",\n";
+    std::cout << ind2 << "\"streams_breakdown\": \"" << json_escape(m.streams_breakdown) << "\",\n";
+    std::cout << ind2 << "\"streams_breakdown_level1\": \"" << json_escape(m.streams_breakdown_level1) << "\",\n";
+    std::cout << ind2 << "\"streams_breakdown_level2\": \"" << json_escape(m.streams_breakdown_level2) << "\",\n";
+    std::cout << ind2 << "\"streams_breakdown_level3\": \"" << json_escape(m.streams_breakdown_level3) << "\",\n";
     std::cout << ind2 << "\"total_stream_measures\": " << m.total_stream_measures << ",\n";
     std::cout << ind2 << "\"total_break_measures\": " << m.total_break_measures << ",\n";
     std::cout << ind2 << "\"total_steps\": " << m.total_steps << ",\n";
@@ -230,7 +259,6 @@ static void emit_json_array(const std::vector<ChartMetrics>& charts) {
 }
 
 int main(int argc, char** argv) {
-    std::fprintf(stderr, "enter main\n");
     if (argc < 2) {
         print_usage();
         return 1;
@@ -239,6 +267,7 @@ int main(int argc, char** argv) {
     const std::string simfile = argv[1];
     const std::string steps_type = (argc >= 3) ? argv[2] : "";
     const std::string difficulty = (argc >= 4) ? argv[3] : "";
+    const std::string description = (argc >= 5) ? argv[4] : "";
 
     init_itgmania_runtime(argc, argv);
 
@@ -250,7 +279,17 @@ int main(int argc, char** argv) {
         }
     }
 
-    if (auto parsed = parse_chart_with_itgmania(simfile, steps_type, difficulty, "")) {
+    // Edit charts can have multiple entries. If no description is provided,
+    // return all edit charts matching steps_type/difficulty (as a JSON array).
+    if (!steps_type.empty() && difficulty == "edit" && description.empty()) {
+        auto charts = parse_all_charts_with_itgmania(simfile, steps_type, difficulty, "");
+        if (!charts.empty()) {
+            emit_json_array(charts);
+            return 0;
+        }
+    }
+
+    if (auto parsed = parse_chart_with_itgmania(simfile, steps_type, difficulty, description)) {
         emit_json(*parsed);
     } else {
         emit_json_stub(simfile, steps_type, difficulty);
