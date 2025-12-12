@@ -157,6 +157,7 @@ struct LuaStepsCtx {
     std::string steps_type;
     std::string difficulty;
     std::string description;
+    TimingData* timing = nullptr;
 };
 
 static int lua_steps_getfilename(lua_State* L) {
@@ -184,12 +185,16 @@ static int lua_steps_getdescription(lua_State* L) {
 }
 
 static int lua_steps_gettimingdata(lua_State* L) {
+    auto* ctx = static_cast<LuaStepsCtx*>(lua_touserdata(L, lua_upvalueindex(1)));
     lua_newtable(L);
-    lua_pushcfunction(L, [](lua_State* Linner) -> int {
+    lua_pushlightuserdata(L, ctx);
+    lua_pushcclosure(L, [](lua_State* Linner) -> int {
+        auto* innerCtx = static_cast<LuaStepsCtx*>(lua_touserdata(Linner, lua_upvalueindex(1)));
         double beat = luaL_optnumber(Linner, 2, 0.0);
-        lua_pushnumber(Linner, beat);
+        double seconds = innerCtx && innerCtx->timing ? innerCtx->timing->GetElapsedTimeFromBeat(static_cast<float>(beat)) : beat;
+        lua_pushnumber(Linner, seconds);
         return 1;
-    });
+    }, 1);
     lua_setfield(L, -2, "GetElapsedTimeFromBeat");
     return 1;
 }
@@ -223,7 +228,8 @@ static void push_steps_userdata(lua_State* L, LuaStepsCtx* ctx) {
     lua_pushcclosure(L, lua_steps_getdescription, 1);
     lua_setfield(L, -2, "GetDescription");
 
-    lua_pushcfunction(L, lua_steps_gettimingdata);
+    lua_pushlightuserdata(L, ctx);
+    lua_pushcclosure(L, lua_steps_gettimingdata, 1);
     lua_setfield(L, -2, "GetTimingData");
 
     lua_pushcfunction(L, lua_steps_calculatetechcounts);
@@ -325,7 +331,13 @@ static int lua_ivalues(lua_State* L) {
 static std::string compute_hash_with_lua(const std::string& simfile_path,
                                          const std::string& steps_type,
                                          const std::string& difficulty,
-                                         const std::string& description) {
+                                         const std::string& description,
+                                         TimingData* timing,
+                                         std::string* breakdown_text,
+                                         std::vector<int>* lua_notes_per_measure,
+                                         std::vector<double>* lua_nps_per_measure,
+                                         std::vector<bool>* lua_equally_spaced,
+                                         double* lua_peak_nps) {
     lua_State* L = luaL_newstate();
     if (!L) return "";
     luaL_openlibs(L);
@@ -376,8 +388,14 @@ static std::string compute_hash_with_lua(const std::string& simfile_path,
         lua_close(L);
         return "";
     }
+    const std::string helper_path = "src/extern/itgmania/Themes/Simply Love/Scripts/SL-ChartParserHelpers.lua";
+    if (luaL_dofile(L, helper_path.c_str()) != 0) {
+        std::fprintf(stderr, "lua helper load error: %s\n", lua_tostring(L, -1));
+        lua_close(L);
+        return "";
+    }
 
-    LuaStepsCtx ctx{simfile_path, steps_type, difficulty, description};
+    LuaStepsCtx ctx{simfile_path, steps_type, difficulty, description, timing};
     // Push an error handler to capture Lua stack traces.
     lua_getglobal(L, "debug");
     lua_getfield(L, -1, "traceback");
@@ -399,6 +417,71 @@ static std::string compute_hash_with_lua(const std::string& simfile_path,
     lua_getfield(L, -1, "Streams");
     lua_getfield(L, -1, "Hash");
     std::string result = lua_tostring(L, -1) ? lua_tostring(L, -1) : "";
+    lua_pop(L, 1);
+
+    auto load_int_table = [&](const char* name, std::vector<int>& out) {
+        lua_getfield(L, -1, name);
+        if (lua_istable(L, -1)) {
+            size_t len = lua_objlen(L, -1);
+            out.resize(len);
+            for (size_t i = 0; i < len; ++i) {
+                lua_rawgeti(L, -1, static_cast<int>(i + 1));
+                out[i] = static_cast<int>(lua_tointeger(L, -1));
+                lua_pop(L, 1);
+            }
+        }
+        lua_pop(L, 1);
+    };
+    auto load_double_table = [&](const char* name, std::vector<double>& out) {
+        lua_getfield(L, -1, name);
+        if (lua_istable(L, -1)) {
+            size_t len = lua_objlen(L, -1);
+            out.resize(len);
+            for (size_t i = 0; i < len; ++i) {
+                lua_rawgeti(L, -1, static_cast<int>(i + 1));
+                out[i] = lua_tonumber(L, -1);
+                lua_pop(L, 1);
+            }
+        }
+        lua_pop(L, 1);
+    };
+    auto load_bool_table = [&](const char* name, std::vector<bool>& out) {
+        lua_getfield(L, -1, name);
+        if (lua_istable(L, -1)) {
+            size_t len = lua_objlen(L, -1);
+            out.resize(len);
+            for (size_t i = 0; i < len; ++i) {
+                lua_rawgeti(L, -1, static_cast<int>(i + 1));
+                out[i] = lua_toboolean(L, -1) != 0;
+                lua_pop(L, 1);
+            }
+        }
+        lua_pop(L, 1);
+    };
+
+    if (lua_notes_per_measure) load_int_table("NotesPerMeasure", *lua_notes_per_measure);
+    if (lua_nps_per_measure) load_double_table("NPSperMeasure", *lua_nps_per_measure);
+    if (lua_equally_spaced) load_bool_table("EquallySpacedPerMeasure", *lua_equally_spaced);
+    if (lua_peak_nps) {
+        lua_getfield(L, -1, "PeakNPS");
+        *lua_peak_nps = lua_tonumber(L, -1);
+        lua_pop(L, 1);
+    }
+    if (breakdown_text) {
+        lua_getglobal(L, "GenerateBreakdownText");
+        lua_pushstring(L, "P1");
+        lua_pushinteger(L, 0); // minimization level 0 for detailed breakdown
+        if (lua_pcall(L, 2, 1, 0) != 0) {
+            std::fprintf(stderr, "lua breakdown error: %s\n", lua_tostring(L, -1));
+            lua_pop(L, 1);
+        } else if (lua_isstring(L, -1)) {
+            *breakdown_text = lua_tostring(L, -1);
+            lua_pop(L, 1);
+        } else {
+            lua_pop(L, 1);
+        }
+    }
+
     lua_close(L);
     return result;
 }
@@ -417,15 +500,6 @@ static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Ste
 
     const TechCounts& tech = steps->GetTechCounts(PLAYER_1);
 
-    std::vector<int> notes_per_measure;
-    const std::vector<int>& npm = steps->GetNotesPerMeasure(PLAYER_1);
-    notes_per_measure.assign(npm.begin(), npm.end());
-
-    std::vector<double> nps_per_measure;
-    const std::vector<float>& nps = steps->GetNpsPerMeasure(PLAYER_1);
-    nps_per_measure.reserve(nps.size());
-    for (float v : nps) nps_per_measure.push_back(static_cast<double>(v));
-
     RadarValues radar = steps->GetRadarValues(PLAYER_1);
     int jumps = static_cast<int>(radar[RadarCategory_Jumps]);
     int hands = static_cast<int>(radar[RadarCategory_Hands]);
@@ -436,7 +510,13 @@ static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Ste
     out.title = song.GetDisplayMainTitle();
     out.subtitle = song.GetDisplaySubTitle();
     out.artist = song.GetDisplayArtist();
-    out.hash = compute_hash_with_lua(simfile_path, st_str, diff_str, steps->GetDescription());
+    std::vector<int> lua_notes_pm;
+    std::vector<double> lua_nps_pm;
+    std::vector<bool> lua_equally_spaced;
+    double lua_peak_nps = 0.0;
+    out.hash = compute_hash_with_lua(simfile_path, st_str, diff_str, steps->GetDescription(), steps->GetTimingData(),
+                                     &out.streams_breakdown,
+                                     &lua_notes_pm, &lua_nps_pm, &lua_equally_spaced, &lua_peak_nps);
     out.steps_type = st_str;
     out.difficulty = diff_str;
     out.meter = steps->GetMeter();
@@ -445,7 +525,29 @@ static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Ste
     steps->GetNoteData(nd);
     float last_beat = nd.GetLastBeat();
     out.duration_seconds = steps->GetTimingData()->GetElapsedTimeFromBeat(last_beat);
+    std::vector<int> notes_per_measure;
+    std::vector<double> nps_per_measure;
+    if (lua_notes_pm.empty()) {
+        const std::vector<int>& npm = steps->GetNotesPerMeasure(PLAYER_1);
+        notes_per_measure.assign(npm.begin(), npm.end());
+
+        const std::vector<float>& nps = steps->GetNpsPerMeasure(PLAYER_1);
+        nps_per_measure.reserve(nps.size());
+        for (float v : nps) nps_per_measure.push_back(static_cast<double>(v));
+    } else {
+        notes_per_measure = std::move(lua_notes_pm);
+        nps_per_measure = std::move(lua_nps_pm);
+    }
     out.total_steps = static_cast<int>(std::accumulate(notes_per_measure.begin(), notes_per_measure.end(), 0));
+    if (!lua_equally_spaced.empty()) {
+        out.equally_spaced_per_measure = std::move(lua_equally_spaced);
+        out.peak_nps = lua_peak_nps;
+    } else {
+        // Fallback: mark all measures as not guaranteed equally spaced and use computed peak.
+        out.equally_spaced_per_measure.assign(out.notes_per_measure.size(), false);
+        out.peak_nps = 0.0;
+        for (double v : out.nps_per_measure) out.peak_nps = std::max(out.peak_nps, v);
+    }
     out.notes_per_measure = std::move(notes_per_measure);
     out.nps_per_measure = std::move(nps_per_measure);
     out.jumps = jumps;

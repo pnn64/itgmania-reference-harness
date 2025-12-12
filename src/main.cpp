@@ -25,9 +25,12 @@ static void emit_json_stub(
     std::cout << "  \"bpms\": \"\",\n";
     std::cout << "  \"hash\": \"\",\n";
     std::cout << "  \"duration_seconds\": null,\n";
+    std::cout << "  \"streams_breakdown\": \"\",\n";
     std::cout << "  \"total_steps\": null,\n";
     std::cout << "  \"notes_per_measure\": [],\n";
     std::cout << "  \"nps_per_measure\": [],\n";
+    std::cout << "  \"equally_spaced_per_measure\": [],\n";
+    std::cout << "  \"peak_nps\": null,\n";
     std::cout << "  \"tech_counts\": {\n";
     std::cout << "    \"crossovers\": 0,\n";
     std::cout << "    \"footswitches\": 0,\n";
@@ -53,6 +56,7 @@ static void emit_chart_json(const ChartMetrics& m, const std::string& indent) {
     std::cout << ind2 << "\"bpms\": \"" << m.bpms << "\",\n";
     std::cout << ind2 << "\"hash\": \"" << m.hash << "\",\n";
     std::cout << ind2 << "\"duration_seconds\": " << m.duration_seconds << ",\n";
+    std::cout << ind2 << "\"streams_breakdown\": \"" << m.streams_breakdown << "\",\n";
     std::cout << ind2 << "\"total_steps\": " << m.total_steps << ",\n";
     std::cout << ind2 << "\"notes_per_measure\": [";
     for (size_t i = 0; i < m.notes_per_measure.size(); ++i) {
@@ -66,6 +70,13 @@ static void emit_chart_json(const ChartMetrics& m, const std::string& indent) {
         std::cout << m.nps_per_measure[i];
     }
     std::cout << "],\n";
+    std::cout << ind2 << "\"equally_spaced_per_measure\": [";
+    for (size_t i = 0; i < m.equally_spaced_per_measure.size(); ++i) {
+        if (i) std::cout << ", ";
+        std::cout << (m.equally_spaced_per_measure[i] ? "true" : "false");
+    }
+    std::cout << "],\n";
+    std::cout << ind2 << "\"peak_nps\": " << m.peak_nps << ",\n";
     std::cout << ind2 << "\"jumps\": " << m.jumps << ",\n";
     std::cout << ind2 << "\"hands\": " << m.hands << ",\n";
     std::cout << ind2 << "\"quads\": " << m.quads << ",\n";
