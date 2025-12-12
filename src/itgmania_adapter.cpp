@@ -8,8 +8,10 @@
 #include <string>
 #include <vector>
 #include <numeric>
+#include <fstream>
 #include <filesystem>
 #include <optional>
+#include <tomcrypt.h>
 
 #ifdef ITGMANIA_HARNESS
 #include "global.h"
@@ -147,6 +149,261 @@ static bool load_song(const std::string& simfile_path, Song& song) {
     return false;
 }
 
+// ---------------------------------------------------------------------------
+// Lua-driven hash using Simply Love's chart parser (no Lua file modifications).
+namespace {
+struct LuaStepsCtx {
+    std::string filename;
+    std::string steps_type;
+    std::string difficulty;
+    std::string description;
+};
+
+static int lua_steps_getfilename(lua_State* L) {
+    auto* ctx = static_cast<LuaStepsCtx*>(lua_touserdata(L, lua_upvalueindex(1)));
+    lua_pushstring(L, ctx->filename.c_str());
+    return 1;
+}
+
+static int lua_steps_getstepstype(lua_State* L) {
+    auto* ctx = static_cast<LuaStepsCtx*>(lua_touserdata(L, lua_upvalueindex(1)));
+    lua_pushstring(L, ctx->steps_type.c_str());
+    return 1;
+}
+
+static int lua_steps_getdifficulty(lua_State* L) {
+    auto* ctx = static_cast<LuaStepsCtx*>(lua_touserdata(L, lua_upvalueindex(1)));
+    lua_pushstring(L, ctx->difficulty.c_str());
+    return 1;
+}
+
+static int lua_steps_getdescription(lua_State* L) {
+    auto* ctx = static_cast<LuaStepsCtx*>(lua_touserdata(L, lua_upvalueindex(1)));
+    lua_pushstring(L, ctx->description.c_str());
+    return 1;
+}
+
+static int lua_steps_gettimingdata(lua_State* L) {
+    lua_newtable(L);
+    lua_pushcfunction(L, [](lua_State* Linner) -> int {
+        double beat = luaL_optnumber(Linner, 2, 0.0);
+        lua_pushnumber(Linner, beat);
+        return 1;
+    });
+    lua_setfield(L, -2, "GetElapsedTimeFromBeat");
+    return 1;
+}
+
+static int lua_steps_calculatetechcounts(lua_State* L) {
+    lua_newtable(L);
+    lua_pushcfunction(L, [](lua_State* Linner) -> int {
+        lua_pushnumber(Linner, 0);
+        return 1;
+    });
+    lua_setfield(L, -2, "GetValue");
+    return 1;
+}
+
+static void push_steps_userdata(lua_State* L, LuaStepsCtx* ctx) {
+    lua_newtable(L);
+
+    lua_pushlightuserdata(L, ctx);
+    lua_pushcclosure(L, lua_steps_getfilename, 1);
+    lua_setfield(L, -2, "GetFilename");
+
+    lua_pushlightuserdata(L, ctx);
+    lua_pushcclosure(L, lua_steps_getstepstype, 1);
+    lua_setfield(L, -2, "GetStepsType");
+
+    lua_pushlightuserdata(L, ctx);
+    lua_pushcclosure(L, lua_steps_getdifficulty, 1);
+    lua_setfield(L, -2, "GetDifficulty");
+
+    lua_pushlightuserdata(L, ctx);
+    lua_pushcclosure(L, lua_steps_getdescription, 1);
+    lua_setfield(L, -2, "GetDescription");
+
+    lua_pushcfunction(L, lua_steps_gettimingdata);
+    lua_setfield(L, -2, "GetTimingData");
+
+    lua_pushcfunction(L, lua_steps_calculatetechcounts);
+    lua_setfield(L, -2, "CalculateTechCounts");
+}
+
+static int lua_ragefile_open(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    const char* path = luaL_checkstring(L, 2);
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    lua_pushstring(L, ss.str().c_str());
+    lua_setfield(L, 1, "_contents");
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+static int lua_ragefile_create(lua_State* L) {
+    lua_newtable(L);
+    lua_pushcfunction(L, lua_ragefile_open);
+    lua_setfield(L, -2, "Open");
+
+    lua_pushcfunction(L, [](lua_State* Linner) -> int {
+        luaL_checktype(Linner, 1, LUA_TTABLE);
+        lua_getfield(Linner, 1, "_contents");
+        return 1;
+    });
+    lua_setfield(L, -2, "Read");
+
+    lua_pushcfunction(L, [](lua_State*) -> int { return 0; });
+    lua_setfield(L, -2, "destroy");
+    return 1;
+}
+
+static int lua_cryptman_sha1(lua_State* L) {
+    size_t len = 0;
+    const char* data = luaL_checklstring(L, 2, &len);
+    unsigned char out[20];
+    hash_state hs;
+    sha1_init(&hs);
+    sha1_process(&hs, reinterpret_cast<const unsigned char*>(data), static_cast<unsigned long>(len));
+    sha1_done(&hs, out);
+    lua_pushlstring(L, reinterpret_cast<const char*>(out), sizeof(out));
+    return 1;
+}
+
+static int lua_binary_to_hex(lua_State* L) {
+    size_t len = 0;
+    const unsigned char* data = reinterpret_cast<const unsigned char*>(luaL_checklstring(L, 1, &len));
+    static const char* hex = "0123456789abcdef";
+    std::string out;
+    out.reserve(len * 2);
+    for (size_t i = 0; i < len; ++i) {
+        out.push_back(hex[data[i] >> 4]);
+        out.push_back(hex[data[i] & 0x0F]);
+    }
+    lua_pushlstring(L, out.c_str(), out.size());
+    return 1;
+}
+
+static int lua_toenumshort(lua_State* L) {
+    const char* s = luaL_checkstring(L, 1);
+    lua_pushstring(L, s);
+    return 1;
+}
+
+static int lua_oldstyle_diff(lua_State* L) {
+    const char* s = luaL_checkstring(L, 1);
+    lua_pushstring(L, s);
+    return 1;
+}
+
+static int lua_ivalues_iter(lua_State* L) {
+    lua_Integer idx = lua_tointeger(L, lua_upvalueindex(2)) + 1;
+    lua_pushinteger(L, idx);
+    lua_replace(L, lua_upvalueindex(2));
+
+    lua_pushvalue(L, lua_upvalueindex(1)); // table
+    lua_pushinteger(L, idx);
+    lua_gettable(L, -2);
+    lua_remove(L, -2); // remove table
+    if (lua_isnil(L, -1)) return 0;
+    return 1;
+}
+
+static int lua_ivalues(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    lua_pushvalue(L, 1);     // upvalue 1: table
+    lua_pushinteger(L, 0);   // upvalue 2: current index
+    lua_pushcclosure(L, lua_ivalues_iter, 2);
+    return 1;
+}
+
+static std::string compute_hash_with_lua(const std::string& simfile_path,
+                                         const std::string& steps_type,
+                                         const std::string& difficulty,
+                                         const std::string& description) {
+    lua_State* L = luaL_newstate();
+    if (!L) return "";
+    luaL_openlibs(L);
+
+    lua_newtable(L);
+    lua_pushcfunction(L, lua_ragefile_create);
+    lua_setfield(L, -2, "CreateRageFile");
+    lua_setglobal(L, "RageFileUtil");
+
+    lua_newtable(L);
+    lua_pushcfunction(L, lua_cryptman_sha1);
+    lua_setfield(L, -2, "SHA1String");
+    lua_setglobal(L, "CRYPTMAN");
+
+    lua_pushcfunction(L, lua_binary_to_hex);
+    lua_setglobal(L, "BinaryToHex");
+    lua_pushcfunction(L, lua_toenumshort);
+    lua_setglobal(L, "ToEnumShortString");
+    lua_pushcfunction(L, lua_oldstyle_diff);
+    lua_setglobal(L, "OldStyleStringToDifficulty");
+    lua_pushcfunction(L, lua_ivalues);
+    lua_setglobal(L, "ivalues");
+    lua_pushcfunction(L, [](lua_State* Linner) -> int {
+        if (!lua_istable(Linner, 1)) { lua_pushboolean(Linner, 0); return 1; }
+        lua_pushnil(Linner);
+        bool has = lua_next(Linner, 1) != 0;
+        if (has) lua_pop(Linner, 2); // pop value + key
+        lua_pushboolean(Linner, has);
+        return 1;
+    });
+    lua_setglobal(L, "TableContainsData");
+
+    lua_newtable(L);
+    lua_newtable(L);
+    lua_pushnumber(L, 0);
+    lua_setfield(L, -2, "ColumnCueMinTime");
+    lua_setfield(L, -2, "Global");
+    lua_newtable(L); lua_newtable(L); lua_setfield(L, -2, "Streams"); lua_setfield(L, -2, "P1");
+    lua_newtable(L); lua_newtable(L); lua_setfield(L, -2, "Streams"); lua_setfield(L, -2, "P2");
+    lua_setglobal(L, "SL");
+
+    lua_pushstring(L, "P1");
+    lua_setglobal(L, "player");
+
+    const std::string parser_path = "src/extern/itgmania/Themes/Simply Love/Scripts/SL-ChartParser.lua";
+    if (luaL_dofile(L, parser_path.c_str()) != 0) {
+        std::fprintf(stderr, "lua load error: %s\n", lua_tostring(L, -1));
+        lua_close(L);
+        return "";
+    }
+
+    LuaStepsCtx ctx{simfile_path, steps_type, difficulty, description};
+    // Push an error handler to capture Lua stack traces.
+    lua_getglobal(L, "debug");
+    lua_getfield(L, -1, "traceback");
+    lua_remove(L, -2); // remove debug table, leave traceback on stack
+    int errfunc = lua_gettop(L);
+
+    lua_getglobal(L, "ParseChartInfo");
+    push_steps_userdata(L, &ctx);
+    lua_pushstring(L, "P1");
+    if (lua_pcall(L, 2, 0, errfunc) != 0) {
+        std::fprintf(stderr, "lua ParseChartInfo error: %s\n", lua_tostring(L, -1));
+        lua_close(L);
+        return "";
+    }
+    lua_pop(L, 1); // pop traceback handler
+
+    lua_getglobal(L, "SL");
+    lua_getfield(L, -1, "P1");
+    lua_getfield(L, -1, "Streams");
+    lua_getfield(L, -1, "Hash");
+    std::string result = lua_tostring(L, -1) ? lua_tostring(L, -1) : "";
+    lua_close(L);
+    return result;
+}
+} // namespace
+
 static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Steps* steps, const Song& song) {
     steps->GetTimingData()->TidyUpData(false);
     steps->CalculateStepStats(0.0f);
@@ -179,6 +436,7 @@ static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Ste
     out.title = song.GetDisplayMainTitle();
     out.subtitle = song.GetDisplaySubTitle();
     out.artist = song.GetDisplayArtist();
+    out.hash = compute_hash_with_lua(simfile_path, st_str, diff_str, steps->GetDescription());
     out.steps_type = st_str;
     out.difficulty = diff_str;
     out.meter = steps->GetMeter();

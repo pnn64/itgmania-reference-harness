@@ -23,6 +23,7 @@ static void emit_json_stub(
     std::cout << "  \"difficulty\": \"" << difficulty << "\",\n";
     std::cout << "  \"meter\": null,\n";
     std::cout << "  \"bpms\": \"\",\n";
+    std::cout << "  \"hash\": \"\",\n";
     std::cout << "  \"total_steps\": null,\n";
     std::cout << "  \"notes_per_measure\": [],\n";
     std::cout << "  \"nps_per_measure\": [],\n";
@@ -49,6 +50,7 @@ static void emit_chart_json(const ChartMetrics& m, const std::string& indent) {
     std::cout << ind2 << "\"difficulty\": \"" << m.difficulty << "\",\n";
     std::cout << ind2 << "\"meter\": " << m.meter << ",\n";
     std::cout << ind2 << "\"bpms\": \"" << m.bpms << "\",\n";
+    std::cout << ind2 << "\"hash\": \"" << m.hash << "\",\n";
     std::cout << ind2 << "\"total_steps\": " << m.total_steps << ",\n";
     std::cout << ind2 << "\"notes_per_measure\": [";
     for (size_t i = 0; i < m.notes_per_measure.size(); ++i) {

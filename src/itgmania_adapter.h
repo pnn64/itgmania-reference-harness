@@ -15,6 +15,7 @@ struct TechCountsOut {
 
 struct ChartMetrics {
     std::string simfile;
+    std::string hash;
     std::string title;
     std::string subtitle;
     std::string artist;
