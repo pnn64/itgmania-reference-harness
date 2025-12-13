@@ -28,18 +28,15 @@ It also runs Simply Love’s chart parser Lua (`Themes/Simply Love/Scripts/SL-Ch
 
 - CMake ≥ 3.20
 - C++17 compiler
-- Libraries (needed when not using a prebuilt ITGMania lib):
-  - libtomcrypt
-  - libtommath
-  - libpcre
-  - Lua 5.1
-  - jsoncpp
+- Dependencies for building ITGMania and the harness (recommended first-time setup)
 
-On Ubuntu/Debian:
+On Ubuntu/Debian (covers both ITGMania + the harness):
 
 ```bash
-sudo apt-get install -y cmake g++ \
-  libtomcrypt-dev libtommath-dev libpcre3-dev liblua5.1-0-dev libjsoncpp-dev
+sudo apt-get update && sudo apt-get install -y \
+  zstd cmake build-essential \
+  libtomcrypt-dev libtommath-dev libpcre3-dev liblua5.1-0-dev libjsoncpp-dev \
+  nasm libgtk-3-dev libasound2-dev libpulse-dev pkg-config libglu1-mesa-dev libudev-dev
 ```
 
 ### Get the ITGMania submodule
@@ -48,12 +45,24 @@ sudo apt-get install -y cmake g++ \
 git submodule update --init --recursive
 ```
 
+### Build ITGMania (first)
+
+The harness compiles against ITGMania code and uses generated headers from an ITGMania build directory.
+
+From the repo root:
+
+```bash
+cd src/extern/itgmania/Build
+cmake -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release .. && cmake ..
+make -j"$(nproc)"
+```
+
 ### Configure + build
 
 Recommended: compile a minimal subset of ITGMania sources needed for parsing:
 
 ```bash
-cmake -S . -B build -DUSE_ITGMANIA_SOURCES=ON
+cmake -S . -B build
 cmake --build build
 ```
 
