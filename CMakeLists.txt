@@ -6,11 +6,15 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 set(ITGMANIA_ROOT "${CMAKE_CURRENT_LIST_DIR}/src/extern/itgmania" CACHE PATH "Path to the ITGmania source tree (defaults to the vendored submodule)")
-option(USE_ITGMANIA_SOURCES "Attempt to compile against ITGmania parsing sources" OFF)
+option(USE_ITGMANIA_SOURCES "Attempt to compile against ITGmania parsing sources" ON)
 option(USE_ITGMANIA_PREBUILT "Link against a prebuilt ITGmania static/shared library" OFF)
 set(ITGMANIA_BUILD_DIR "" CACHE PATH "Path to an existing ITGmania build directory (for generated headers like config.hpp)")
 set(ITGMANIA_LIB "" CACHE FILEPATH "Path to a prebuilt ITGmania library (if USE_ITGMANIA_PREBUILT=ON)")
 set(ITGMANIA_EXTERN_DIR "" CACHE PATH "Path to ITGmania extern build products (auto-detected when possible)")
+
+if(NOT USE_ITGMANIA_SOURCES AND NOT USE_ITGMANIA_PREBUILT)
+  message(WARNING "Building in stub-only mode; set USE_ITGMANIA_SOURCES=ON (default) for real parsing output.")
+endif()
 
 if(NOT ITGMANIA_BUILD_DIR)
   if(EXISTS "${ITGMANIA_ROOT}/Build")
