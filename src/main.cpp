@@ -6,6 +6,8 @@
 
 #include "itgmania_adapter.h"
 
+static constexpr std::string_view kVersion = "0.0.20";
+
 static std::string json_escape(std::string_view s) {
     std::string out;
     out.reserve(s.size());
@@ -56,10 +58,12 @@ static void emit_labels_table(std::ostream& out, const std::vector<TimingLabelOu
 
 static void print_usage() {
     std::cerr
+        << "itgmania-reference-harness v" << kVersion << "\n"
         << "Usage:\n"
         << "  itgmania-reference-harness [--hash|-h] <simfile> [steps-type] [difficulty] [description]\n"
         << "\n"
         << "Options:\n"
+        << "  --version, -v Print the version and exit\n"
         << "  --hash, -h   Print a hash list (one line per chart), no JSON\n"
         << "  --help       Show this help\n";
 }
@@ -284,6 +288,7 @@ static void emit_json_array(std::ostream& out, const std::vector<ChartMetrics>& 
 struct CliOpts {
     bool hash_mode = false;
     bool help = false;
+    bool version = false;
     std::vector<std::string> positional;
 };
 
@@ -294,6 +299,10 @@ static CliOpts parse_args(int argc, char** argv) {
 
         if (a == "--hash" || a == "-h") {
             o.hash_mode = true;
+            continue;
+        }
+        if (a == "--version" || a == "-v") {
+            o.version = true;
             continue;
         }
         if (a == "--help") {
@@ -341,6 +350,11 @@ static int run_hash_mode(const std::string& simfile) {
 int main(int argc, char** argv) {
     const CliOpts opts = parse_args(argc, argv);
 
+    if (opts.version) {
+        std::cout << kVersion << "\n";
+        return 0;
+    }
+
     if (opts.help || opts.positional.empty()) {
         print_usage();
         return opts.help ? 0 : 1;
@@ -383,4 +397,3 @@ int main(int argc, char** argv) {
 
     return 0;
 }
-
