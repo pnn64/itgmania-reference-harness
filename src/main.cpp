@@ -2,6 +2,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <iomanip>
 
 #include "itgmania_adapter.h"
 
@@ -54,7 +55,13 @@ static void emit_labels_table(std::ostream& out, const std::vector<TimingLabelOu
 }
 
 static void print_usage() {
-    std::cerr << "Usage: itgmania-reference-harness <simfile> [steps-type] [difficulty] [description]\n";
+    std::cerr
+        << "Usage:\n"
+        << "  itgmania-reference-harness [--hash|-h] <simfile> [steps-type] [difficulty] [description]\n"
+        << "\n"
+        << "Options:\n"
+        << "  --hash, -h   Print a hash list (one line per chart), no JSON\n"
+        << "  --help       Show this help\n";
 }
 
 static void emit_json_stub_timing(std::ostream& out) {
@@ -274,16 +281,79 @@ static void emit_json_array(std::ostream& out, const std::vector<ChartMetrics>& 
     out << "]\n";
 }
 
-int main(int argc, char** argv) {
-    if (argc < 2) {
-        print_usage();
-        return 1;
+struct CliOpts {
+    bool hash_mode = false;
+    bool help = false;
+    std::vector<std::string> positional;
+};
+
+static CliOpts parse_args(int argc, char** argv) {
+    CliOpts o;
+    for (int i = 1; i < argc; ++i) {
+        std::string a = argv[i];
+
+        if (a == "--hash" || a == "-h") {
+            o.hash_mode = true;
+            continue;
+        }
+        if (a == "--help") {
+            o.help = true;
+            continue;
+        }
+        if (a == "--") {
+            for (++i; i < argc; ++i) o.positional.emplace_back(argv[i]);
+            break;
+        }
+        if (!a.empty() && a[0] == '-') {
+            std::cerr << "Unknown option: " << a << "\n";
+            o.help = true;
+            return o;
+        }
+
+        o.positional.push_back(std::move(a));
+    }
+    return o;
+}
+
+static int run_hash_mode(const std::string& simfile) {
+    init_itgmania_runtime(0, nullptr);
+
+    auto charts = parse_all_charts_with_itgmania(simfile, "", "", "");
+    if (charts.empty()) {
+        std::cerr << "No charts parsed for: " << simfile << "\n";
+        return 2;
     }
 
-    const std::string simfile = argv[1];
-    const std::string steps_type = (argc >= 3) ? argv[2] : "";
-    const std::string difficulty = (argc >= 4) ? argv[3] : "";
-    const std::string description = (argc >= 5) ? argv[4] : "";
+    for (const auto& m : charts) {
+        // No extra logic: print the parsed values directly.
+        // Hash is already produced by ITGmania/Lua and should already be 16 chars in your setup.
+        std::cout
+            << std::left  << std::setw(20) << m.steps_type
+            << std::right << std::setw(6)  << m.meter << "  "
+            << std::left  << std::setw(18) << m.difficulty << "  "
+            << m.hash
+            << "\n";
+    }
+
+    return 0;
+}
+
+int main(int argc, char** argv) {
+    const CliOpts opts = parse_args(argc, argv);
+
+    if (opts.help || opts.positional.empty()) {
+        print_usage();
+        return opts.help ? 0 : 1;
+    }
+
+    const std::string simfile = opts.positional[0];
+    const std::string steps_type = (opts.positional.size() >= 2) ? opts.positional[1] : "";
+    const std::string difficulty = (opts.positional.size() >= 3) ? opts.positional[2] : "";
+    const std::string description = (opts.positional.size() >= 4) ? opts.positional[3] : "";
+
+    if (opts.hash_mode) {
+        return run_hash_mode(simfile);
+    }
 
     init_itgmania_runtime(argc, argv);
 
@@ -313,3 +383,4 @@ int main(int argc, char** argv) {
 
     return 0;
 }
+
