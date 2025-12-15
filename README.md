@@ -94,12 +94,33 @@ Parse a specific Edit chart (use `description` to disambiguate):
 ./build/itgmania-reference-harness path/to/song.sm dance-single edit "My Edit Description"
 ```
 
-Notes:
+## Notes:
 
 - Difficulty names use ITGMania/StepMania’s enums (`beginner`, `easy`, `medium`, `hard`, `challenge`, `edit`).
 - Edit charts can have multiple entries; use the `description` field to identify/select a specific one.
 - If the requested chart isn’t found, the tool prints a JSON stub (`"status": "stub"`).
 - JSON is written to stdout.
+
+## Hash-only mode (no JSON)
+
+Print one line per chart with steps type, meter, difficulty, and the Simply Love chart hash:
+
+```bash
+./build/itgmania-reference-harness --hash 15gays1pack/1UL\ \[StarrySergal\]/1UL.ssc
+# or
+./build/itgmania-reference-harness -h 15gays1pack/1UL\ \[StarrySergal\]/1UL.ssc
+```
+
+Example output:
+
+```bash
+dance-single             3  beginner            c198009b40759f7c
+dance-single             6  easy                e536c8f6bbfbd457
+dance-single             8  medium              9784aeb857a16756
+dance-single             9  hard                67aed01cbc1f436a
+dance-single            10  challenge           408dfb4f0bcb3dcd
+dance-single            10  edit                ce09f28e1fb3271f
+```
 
 ## Output Format
 
