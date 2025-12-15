@@ -1,13 +1,11 @@
 # itgmania-reference-harness
 
-Small CLI that loads a simfile (e.g. `.sm` / `.ssc`) using ITGMania parsing code and prints per-chart metrics as JSON.
-
-It also runs Simply Love’s chart parser Lua (`Themes/Simply Love/Scripts/SL-ChartParser*.lua`) **unchanged** to reproduce the same chart hash / stream analysis that Simply Love uses.
+CLI that loads a simfile (e.g. `.sm` / `.ssc`) using ITGMania parsing code and prints per-chart metrics as JSON. It also runs Simply Love's chart parser Lua (`Themes/Simply Love/Scripts/SL-ChartParser*.lua`) unchanged; embedded copies are bundled so the tool works even when those scripts aren't on disk.
 
 ## Features
 
 - Parse simfiles via ITGMania `Song`/`Steps` loaders
-- Compute (per chart):
+- Compute per-chart metrics:
   - Metadata: title/subtitle/artist, step artist, steps type, difficulty, meter
   - BPMs: raw BPM string, actual min/max, display BPM string + min/max (Simply Love behavior)
   - Duration, notes-per-measure, NPS-per-measure, peak NPS
@@ -16,9 +14,9 @@ It also runs Simply Love’s chart parser Lua (`Themes/Simply Love/Scripts/SL-Ch
   - Radar counts (taps/holds/notes/holds/mines/rolls/lifts/fakes/jumps/hands/quads)
   - Full timing segment tables (BPM/stop/delay/warp/time signature/etc.)
 
-## Repo Layout
+## Repo layout
 
-- `src/extern/itgmania/`: ITGMania submodule (required for parsing + Simply Love scripts)
+- `src/extern/itgmania/`: ITGMania submodule (parsing + Simply Love scripts)
 - `src/main.cpp`: CLI entrypoint
 - `src/itgmania_adapter.cpp`: ITGMania parsing + Simply Love Lua bridge
 
@@ -28,9 +26,7 @@ It also runs Simply Love’s chart parser Lua (`Themes/Simply Love/Scripts/SL-Ch
 
 - CMake ≥ 3.20
 - C++17 compiler
-- Dependencies for building ITGMania and the harness (recommended first-time setup)
-
-On Ubuntu/Debian (covers both ITGMania + the harness):
+- Dependencies for ITGMania and the harness (example for Ubuntu/Debian):
 
 ```bash
 sudo apt-get update && sudo apt-get install -y \
@@ -49,92 +45,82 @@ git submodule update --init --recursive
 
 The harness compiles against ITGMania code and uses generated headers from an ITGMania build directory.
 
-From the repo root:
-
 ```bash
 cd src/extern/itgmania/Build
 cmake -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release .. && cmake ..
 make -j"$(nproc)"
 ```
 
-### Configure + build
+### Configure and build the harness
 
-Recommended: compile a minimal subset of ITGMania sources needed for parsing:
+Recommended minimal build:
 
 ```bash
 cmake -S . -B build
 cmake --build build
 ```
 
-If you request chart parsing without `USE_ITGMANIA_SOURCES=ON` (or without linking a prebuilt ITGMania), the binary will build but will typically return `status: "stub"` because the full parsing/runtime pieces aren’t present.
+If you request chart parsing without `USE_ITGMANIA_SOURCES=ON` (or without linking a prebuilt ITGMania), the binary builds but typically returns `status: "stub"` because the full parsing/runtime pieces aren't present.
 
 ## Usage
 
-Parse *all* charts in a simfile (prints a JSON array):
+### Parse all charts (JSON array)
 
 ```bash
 ./build/itgmania-reference-harness path/to/song.sm
 ```
 
-Parse a specific chart:
+### Parse a specific chart (single JSON object)
 
 ```bash
 ./build/itgmania-reference-harness path/to/song.sm dance-single challenge
 ```
 
-Parse all Edit charts for a steps type:
+### Parse Edit charts for a steps type
 
 ```bash
 ./build/itgmania-reference-harness path/to/song.sm dance-single edit
 ```
 
-Parse a specific Edit chart (use `description` to disambiguate):
+### Parse a specific Edit chart by description
 
 ```bash
 ./build/itgmania-reference-harness path/to/song.sm dance-single edit "My Edit Description"
 ```
 
-## Notes:
-
-- Difficulty names use ITGMania/StepMania’s enums (`beginner`, `easy`, `medium`, `hard`, `challenge`, `edit`).
-- Edit charts can have multiple entries; use the `description` field to identify/select a specific one.
-- If the requested chart isn’t found, the tool prints a JSON stub (`"status": "stub"`).
-- JSON is written to stdout.
-
-## Hash-only mode (no JSON)
+### Hash-only mode (no JSON)
 
 Print one line per chart with steps type, meter, difficulty, and the Simply Love chart hash:
 
 ```bash
-./build/itgmania-reference-harness --hash 15gays1pack/1UL\ \[StarrySergal\]/1UL.ssc
+./build/itgmania-reference-harness --hash path/to/song.ssc
 # or
-./build/itgmania-reference-harness -h 15gays1pack/1UL\ \[StarrySergal\]/1UL.ssc
+./build/itgmania-reference-harness -h path/to/song.ssc
 ```
 
-Example output:
+### Flags
 
-```bash
-dance-single             3  beginner            c198009b40759f7c
-dance-single             6  easy                e536c8f6bbfbd457
-dance-single             8  medium              9784aeb857a16756
-dance-single             9  hard                67aed01cbc1f436a
-dance-single            10  challenge           408dfb4f0bcb3dcd
-dance-single            10  edit                ce09f28e1fb3271f
-```
+- `--hash` / `-h`: hash-only mode
+- `--help`: show usage
+- `--version` / `-v`: print the harness version
 
-## Output Format
+### Notes
 
-The CLI prints either:
+- Difficulty names use ITGMania/StepMania enums (`beginner`, `easy`, `medium`, `hard`, `challenge`, `edit`).
+- Edit charts can have multiple entries; use the `description` field to identify/select one.
+- If the requested chart isn't found, the tool prints a JSON stub (`"status": "stub"`).
+- JSON is written to stdout.
 
-- A JSON array of charts (when only `<simfile>` is provided), or
-- A single JSON object (when `<simfile> <steps-type> <difficulty>` is provided)
+## Output format
+
+The CLI prints either a JSON array of charts (when only `<simfile>` is provided) or a single JSON object (when `<simfile> <steps-type> <difficulty>` is provided).
 
 ### Stream sequences (Simply Love)
 
-`stream_sequences` comes from Simply Love’s `GetStreamSequences(notes_per_measure, 16)`.
+`stream_sequences` comes from Simply Love's `GetStreamSequences(notes_per_measure, 16)`.
 
 - Each element is `{ "stream_start": int, "stream_end": int, "is_break": bool }`
-- Treat these as half-open “measure index” intervals from Simply Love; the length is `stream_end - stream_start`.
+- Treat these as half-open “measure index” intervals; length is `stream_end - stream_start`.
 
 ### Timing data
 
@@ -159,4 +145,4 @@ The CLI prints either:
 
 ## License
 
-ITGMania and Simply Love are included as a submodule and are licensed separately (see `src/extern/itgmania/`).
+ITGMania and Simply Love are included as a submodule and are licensed separately (see `src/extern/itgmania/`). If embedded Lua is used, it is the same source from that submodule.
