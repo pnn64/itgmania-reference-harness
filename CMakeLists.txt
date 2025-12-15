@@ -12,6 +12,27 @@ set(ITGMANIA_BUILD_DIR "" CACHE PATH "Path to an existing ITGmania build directo
 set(ITGMANIA_LIB "" CACHE FILEPATH "Path to a prebuilt ITGmania library (if USE_ITGMANIA_PREBUILT=ON)")
 set(ITGMANIA_EXTERN_DIR "" CACHE PATH "Path to ITGmania extern build products (auto-detected when possible)")
 
+set(SL_CHART_PARSER_PATH "${ITGMANIA_ROOT}/Themes/Simply Love/Scripts/SL-ChartParser.lua")
+set(SL_CHART_PARSER_HELPERS_PATH "${ITGMANIA_ROOT}/Themes/Simply Love/Scripts/SL-ChartParserHelpers.lua")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  "${SL_CHART_PARSER_PATH}"
+  "${SL_CHART_PARSER_HELPERS_PATH}"
+)
+
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated")
+set(EMBEDDED_LUA_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated/embedded_lua.h")
+set(SL_CHART_PARSER_LUA_RAW "")
+set(SL_CHART_PARSER_HELPERS_RAW "")
+
+if(EXISTS "${SL_CHART_PARSER_PATH}" AND EXISTS "${SL_CHART_PARSER_HELPERS_PATH}")
+  file(READ "${SL_CHART_PARSER_PATH}" SL_CHART_PARSER_LUA_RAW)
+  file(READ "${SL_CHART_PARSER_HELPERS_PATH}" SL_CHART_PARSER_HELPERS_RAW)
+else()
+  message(WARNING "Simply Love chart parser Lua not found; embedded copy will be empty. Expected at ${SL_CHART_PARSER_PATH}")
+endif()
+
+configure_file("${CMAKE_CURRENT_SOURCE_DIR}/src/embedded_lua.h.in" "${EMBEDDED_LUA_HEADER}" @ONLY)
+
 if(NOT USE_ITGMANIA_SOURCES AND NOT USE_ITGMANIA_PREBUILT)
   message(WARNING "Building in stub-only mode; set USE_ITGMANIA_SOURCES=ON (default) for real parsing output.")
 endif()
@@ -72,6 +93,7 @@ target_include_directories(itgmania-reference-harness PRIVATE
   ${ITGMANIA_ROOT}/Build
   ${ITGMANIA_ROOT}/build/generated/src
   ${ITGMANIA_ROOT}/build
+  "${CMAKE_CURRENT_BINARY_DIR}/generated"
 )
 
 if(USE_ITGMANIA_PREBUILT)

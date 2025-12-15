@@ -1,0 +1,15 @@
+#pragma once
+
+#include <string_view>
+
+namespace embedded_lua {
+
+constexpr std::string_view kSLChartParserLua = R"LUA_EMBED(
+@SL_CHART_PARSER_LUA_RAW@
+)LUA_EMBED";
+
+constexpr std::string_view kSLChartParserHelpersLua = R"LUA_EMBED(
+@SL_CHART_PARSER_HELPERS_RAW@
+)LUA_EMBED";
+
+}  // namespace embedded_lua

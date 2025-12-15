@@ -6,12 +6,16 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <numeric>
 #include <fstream>
 #include <filesystem>
 #include <optional>
+#include <cstdio>
 #include <tomcrypt.h>
+
+#include "embedded_lua.h"
 
 #ifdef ITGMANIA_HARNESS
 #include "global.h"
@@ -102,6 +106,41 @@ static void init_singletons(int argc, char** argv) {
 
 void init_itgmania_runtime(int argc, char** argv) {
     init_singletons(argc, argv);
+}
+
+static bool load_lua_chunk(lua_State* L, const std::string& path, std::string_view embedded_src, const char* label) {
+    if (std::filesystem::exists(path)) {
+        if (luaL_dofile(L, path.c_str()) == 0) return true;
+
+        std::string err = lua_tostring(L, -1) ? lua_tostring(L, -1) : "";
+        lua_pop(L, 1);
+
+        if (embedded_src.empty()) {
+            std::fprintf(stderr, "lua load error (%s): %s\n", label, err.c_str());
+            return false;
+        }
+
+        std::fprintf(stderr, "lua load error (%s): %s; using embedded copy\n", label, err.c_str());
+    } else if (embedded_src.empty()) {
+        std::fprintf(stderr, "lua load error (%s): missing %s and no embedded copy\n", label, path.c_str());
+        return false;
+    }
+
+    if (luaL_loadbuffer(L, embedded_src.data(), embedded_src.size(), label) != 0) {
+        std::fprintf(stderr, "embedded lua compile error (%s): %s\n", label,
+            lua_tostring(L, -1) ? lua_tostring(L, -1) : "");
+        lua_pop(L, 1);
+        return false;
+    }
+
+    if (lua_pcall(L, 0, 0, 0) != 0) {
+        std::fprintf(stderr, "embedded lua runtime error (%s): %s\n", label,
+            lua_tostring(L, -1) ? lua_tostring(L, -1) : "");
+        lua_pop(L, 1);
+        return false;
+    }
+
+    return true;
 }
 
 static std::string to_lower(const std::string& s) {
@@ -462,14 +501,12 @@ static std::string compute_hash_with_lua(const std::string& simfile_path,
     lua_setglobal(L, "player");
 
     const std::string parser_path = "src/extern/itgmania/Themes/Simply Love/Scripts/SL-ChartParser.lua";
-    if (luaL_dofile(L, parser_path.c_str()) != 0) {
-        std::fprintf(stderr, "lua load error: %s\n", lua_tostring(L, -1));
+    if (!load_lua_chunk(L, parser_path, embedded_lua::kSLChartParserLua, "@SL-ChartParser.lua")) {
         lua_close(L);
         return "";
     }
     const std::string helper_path = "src/extern/itgmania/Themes/Simply Love/Scripts/SL-ChartParserHelpers.lua";
-    if (luaL_dofile(L, helper_path.c_str()) != 0) {
-        std::fprintf(stderr, "lua helper load error: %s\n", lua_tostring(L, -1));
+    if (!load_lua_chunk(L, helper_path, embedded_lua::kSLChartParserHelpersLua, "@SL-ChartParserHelpers.lua")) {
         lua_close(L);
         return "";
     }
