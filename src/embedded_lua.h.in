@@ -1,9 +1,37 @@
 #pragma once
 
+#include <string>
 #include <string_view>
+#include <fstream>
+#include <sstream>
 
 namespace embedded_lua {
 
+inline std::string read_file_or_empty(const char* path) {
+  std::ifstream f(path, std::ios::binary);
+  if (!f) return {};
+  std::ostringstream ss;
+  ss << f.rdbuf();
+  return ss.str();
+}
+
+#if defined(_MSC_VER)
+// On MSVC the embedded raw-string can exceed compiler limits.
+// Load from disk once and expose as string_view.
+inline const std::string& sl_chart_parser_storage() {
+  static const std::string s = read_file_or_empty(R"PATH(@SL_CHART_PARSER_PATH@)PATH");
+  return s;
+}
+inline const std::string& sl_helpers_storage() {
+  static const std::string s = read_file_or_empty(R"PATH(@SL_CHART_PARSER_HELPERS_PATH@)PATH");
+  return s;
+}
+
+inline const std::string_view kSLChartParserLua{sl_chart_parser_storage()};
+inline const std::string_view kSLChartParserHelpersLua{sl_helpers_storage()};
+
+#else
+// Non-MSVC: keep embedding.
 constexpr std::string_view kSLChartParserLua = R"LUA_EMBED(
 @SL_CHART_PARSER_LUA_RAW@
 )LUA_EMBED";
@@ -11,5 +39,6 @@ constexpr std::string_view kSLChartParserLua = R"LUA_EMBED(
 constexpr std::string_view kSLChartParserHelpersLua = R"LUA_EMBED(
 @SL_CHART_PARSER_HELPERS_RAW@
 )LUA_EMBED";
+#endif
 
 }  // namespace embedded_lua

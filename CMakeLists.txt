@@ -5,6 +5,16 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+# Proper cross-platform thread linking (Linux: -pthread, Windows: usually nothing)
+find_package(Threads REQUIRED)
+
+add_compile_definitions(
+  PCRE_STATIC
+  PCRE_EXP_DECL=extern
+  PCRECPP_EXP_DECL=extern
+  PCRECPP_EXP_DEFN=
+)
+
 set(ITGMANIA_ROOT "${CMAKE_CURRENT_LIST_DIR}/src/extern/itgmania" CACHE PATH "Path to the ITGmania source tree (defaults to the vendored submodule)")
 option(USE_ITGMANIA_SOURCES "Attempt to compile against ITGmania parsing sources" ON)
 option(USE_ITGMANIA_PREBUILT "Link against a prebuilt ITGmania static/shared library" OFF)
@@ -79,6 +89,17 @@ if(NOT USE_ITGMANIA_PREBUILT)
 endif()
 
 add_executable(itgmania-reference-harness ${HARNESS_SOURCES})
+
+# Force Lua headers to be seen with C linkage first on every translation unit.
+if(MSVC)
+  target_compile_options(itgmania-reference-harness PRIVATE
+    "/FI${CMAKE_CURRENT_SOURCE_DIR}/src/lua_compat.hpp"
+  )
+else()
+  target_compile_options(itgmania-reference-harness PRIVATE
+    "-include" "${CMAKE_CURRENT_SOURCE_DIR}/src/lua_compat.hpp"
+  )
+endif()
 
 target_include_directories(itgmania-reference-harness PRIVATE
   "${ITGMANIA_ROOT}/src"
@@ -180,10 +201,11 @@ if(USE_ITGMANIA_PREBUILT)
     Xtst
     Xrandr
     Xinerama
-    pthread
+    Threads::Threads
     m
   )
   target_compile_definitions(itgmania-reference-harness PRIVATE ITGMANIA_HARNESS=1)
+
 elseif(USE_ITGMANIA_SOURCES)
   # Minimal subset of ITGmania sources needed for simfile parsing and tech counting.
   set(ITGMANIA_SOURCES
@@ -251,6 +273,6 @@ if(NOT USE_ITGMANIA_PREBUILT)
     ${PCRE_LIB}
     ${LUA_LIB}
     ${JSONCPP_LIB}
-    pthread
+    Threads::Threads
   )
 endif()
