@@ -33,6 +33,7 @@ file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated")
 set(EMBEDDED_LUA_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated/embedded_lua.h")
 set(SL_CHART_PARSER_LUA_RAW "")
 set(SL_CHART_PARSER_HELPERS_RAW "")
+set(LUA_COMPAT_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated/lua_compat.hpp")
 
 if(EXISTS "${SL_CHART_PARSER_PATH}" AND EXISTS "${SL_CHART_PARSER_HELPERS_PATH}")
   file(READ "${SL_CHART_PARSER_PATH}" SL_CHART_PARSER_LUA_RAW)
@@ -41,7 +42,67 @@ else()
   message(WARNING "Simply Love chart parser Lua not found; embedded copy will be empty. Expected at ${SL_CHART_PARSER_PATH}")
 endif()
 
-configure_file("${CMAKE_CURRENT_SOURCE_DIR}/src/embedded_lua.h.in" "${EMBEDDED_LUA_HEADER}" @ONLY)
+set(EMBEDDED_LUA_HEADER_TEMPLATE [=[
+#pragma once
+
+#include <string>
+#include <string_view>
+#include <fstream>
+#include <sstream>
+
+namespace embedded_lua {
+
+inline std::string read_file_or_empty(const char* path) {
+  std::ifstream f(path, std::ios::binary);
+  if (!f) return {};
+  std::ostringstream ss;
+  ss << f.rdbuf();
+  return ss.str();
+}
+
+#if defined(_MSC_VER)
+// On MSVC the embedded raw-string can exceed compiler limits.
+// Load from disk once and expose as string_view.
+inline const std::string& sl_chart_parser_storage() {
+  static const std::string s = read_file_or_empty(R"PATH(@SL_CHART_PARSER_PATH@)PATH");
+  return s;
+}
+inline const std::string& sl_helpers_storage() {
+  static const std::string s = read_file_or_empty(R"PATH(@SL_CHART_PARSER_HELPERS_PATH@)PATH");
+  return s;
+}
+
+inline const std::string_view kSLChartParserLua{sl_chart_parser_storage()};
+inline const std::string_view kSLChartParserHelpersLua{sl_helpers_storage()};
+
+#else
+// Non-MSVC: keep embedding.
+constexpr std::string_view kSLChartParserLua = R"LUA_EMBED(
+@SL_CHART_PARSER_LUA_RAW@
+)LUA_EMBED";
+
+constexpr std::string_view kSLChartParserHelpersLua = R"LUA_EMBED(
+@SL_CHART_PARSER_HELPERS_RAW@
+)LUA_EMBED";
+#endif
+
+}  // namespace embedded_lua
+]=])
+
+string(CONFIGURE "${EMBEDDED_LUA_HEADER_TEMPLATE}" EMBEDDED_LUA_HEADER_CONTENT @ONLY)
+file(WRITE "${EMBEDDED_LUA_HEADER}" "${EMBEDDED_LUA_HEADER_CONTENT}")
+
+set(LUA_COMPAT_HEADER_TEMPLATE [=[
+#pragma once
+extern "C" {
+#include "lua.h"
+#include "lauxlib.h"
+#include "lualib.h"
+}
+]=])
+
+string(CONFIGURE "${LUA_COMPAT_HEADER_TEMPLATE}" LUA_COMPAT_HEADER_CONTENT @ONLY)
+file(WRITE "${LUA_COMPAT_HEADER}" "${LUA_COMPAT_HEADER_CONTENT}")
 
 if(NOT USE_ITGMANIA_SOURCES AND NOT USE_ITGMANIA_PREBUILT)
   message(WARNING "Building in stub-only mode; set USE_ITGMANIA_SOURCES=ON (default) for real parsing output.")
@@ -90,14 +151,13 @@ endif()
 
 add_executable(itgmania-reference-harness ${HARNESS_SOURCES})
 
-# Force Lua headers to be seen with C linkage first on every translation unit.
 if(MSVC)
   target_compile_options(itgmania-reference-harness PRIVATE
-    "/FI${CMAKE_CURRENT_SOURCE_DIR}/src/lua_compat.hpp"
+    "/FI${LUA_COMPAT_HEADER}"
   )
 else()
   target_compile_options(itgmania-reference-harness PRIVATE
-    "-include" "${CMAKE_CURRENT_SOURCE_DIR}/src/lua_compat.hpp"
+    "-include" "${LUA_COMPAT_HEADER}"
   )
 endif()
 

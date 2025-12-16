@@ -3,6 +3,12 @@
 // parsing and tech counting. These implementations are intentionally minimal
 // and should only be used by the harness build.
 
+extern "C" {
+#include "lua.h"
+#include "lauxlib.h"
+#include "lualib.h"
+}
+
 #include "global.h"
 #include "Attack.h"
 #include "GameManager.h"
@@ -35,12 +41,14 @@
 #include "RageTypes.h"
 #include "arch/ArchHooks/ArchHooks.h"
 #include "arch/Threads/Threads.h"
+#include "StdString.h"
 
 #include <tomcrypt.h>
 
 #include <array>
 #include <cctype>
 #include <cerrno>
+#include <cstdint>
 #include <cstring>
 #include <cwctype>
 #include <filesystem>
@@ -54,8 +62,6 @@
 #include <vector>
 #include <ctime>
 #include <cstdlib>
-
-#include "crashhandler_stub.hpp"
 
 // ---------------------------------------------------------------------------
 // Globals
