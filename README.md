@@ -35,10 +35,10 @@ sudo apt-get update && sudo apt-get install -y \
   nasm libgtk-3-dev libasound2-dev libpulse-dev pkg-config libglu1-mesa-dev libudev-dev
 ```
 
-### Get the ITGMania submodule
+### Clone the harness and ITGMania + submodules
 
 ```bash
-git submodule update --init --recursive
+git clone --recurse-submodules https://github.com/pnn64/itgmania-reference-harness.git
 ```
 
 ### Build ITGMania (first)
