@@ -24,7 +24,7 @@ CLI that loads a simfile (e.g. `.sm` / `.ssc`) using ITGMania parsing code and p
 
 ### Prerequisites
 
-- CMake ≥ 3.20
+- CMake >= 3.20
 - C++17 compiler
 - Dependencies for ITGMania and the harness (example for Ubuntu/Debian):
 
@@ -41,19 +41,18 @@ sudo apt-get update && sudo apt-get install -y \
 git clone --recurse-submodules https://github.com/pnn64/itgmania-reference-harness.git
 ```
 
-### Build ITGMania (first)
+### Prepare ITGMania build directory (configure only)
 
-The harness compiles against ITGMania code and uses generated headers from an ITGMania build directory.
+The harness needs ITGMania's generated headers/config from a configure step, but a full ITGMania compile is not required.
 
 ```bash
 cd src/extern/itgmania/Build
 cmake -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release .. && cmake ..
-make -j"$(nproc)"
 ```
 
 ### Configure and build the harness
 
-Recommended minimal build:
+From the repo root after configuring ITGMania:
 
 ```bash
 cmake -S . -B build
@@ -120,7 +119,7 @@ The CLI prints either a JSON array of charts (when only `<simfile>` is provided)
 `stream_sequences` comes from Simply Love's `GetStreamSequences(notes_per_measure, 16)`.
 
 - Each element is `{ "stream_start": int, "stream_end": int, "is_break": bool }`
-- Treat these as half-open “measure index” intervals; length is `stream_end - stream_start`.
+- Treat these as half-open "measure index" intervals; length is `stream_end - stream_start`.
 
 ### Timing data
 
