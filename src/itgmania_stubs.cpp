@@ -1178,9 +1178,8 @@ static void init_globals_once() {
 	if (done) return;
 
 	// Construct only the few preferences we need by hand.
-	static std::aligned_storage_t<sizeof(PrefsManager), alignof(PrefsManager)> prefs_storage;
-	PrefsManager* prefs_raw = reinterpret_cast<PrefsManager*>(&prefs_storage);
-	std::memset(prefs_raw, 0, sizeof(PrefsManager));
+    static std::aligned_storage_t<sizeof(PrefsManager), alignof(PrefsManager)> prefs_storage{};
+    PrefsManager* prefs_raw = reinterpret_cast<PrefsManager*>(&prefs_storage);
 	new (&prefs_raw->m_fGlobalOffsetSeconds) Preference<float>("GlobalOffsetSeconds", 0.0f);
 	new (&prefs_raw->m_bQuirksMode) Preference<bool>("QuirksMode", false);
 	new (&prefs_raw->m_bLightsSimplifyBass) Preference<bool>("LightsSimplifyBass", false);

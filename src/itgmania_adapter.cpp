@@ -152,7 +152,10 @@ static bool load_lua_chunk(lua_State* L, const std::string& path, std::string_vi
 static std::string to_lower(const std::string& s) {
     std::string out;
     out.reserve(s.size());
-    for (char c : s) out.push_back(std::tolower(static_cast<unsigned char>(c)));
+    for (char c : s) {
+        // std::tolower returns int; cast back to char to avoid narrowing warning on MSVC.
+        out.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+    }
     return out;
 }
 
