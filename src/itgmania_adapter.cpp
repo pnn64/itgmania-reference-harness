@@ -159,10 +159,23 @@ static std::string to_lower(const std::string& s) {
     return out;
 }
 
-static std::string steps_type_string(StepsType st) {
-    std::string s = StepsTypeToString(st);
+static std::string normalize_steps_type_string(std::string s) {
     std::replace(s.begin(), s.end(), '_', '-');
     return to_lower(s);
+}
+
+static std::string steps_type_string(StepsType st) {
+    const int sti = static_cast<int>(st);
+    if (sti < 0 || sti >= static_cast<int>(NUM_StepsType)) return "invalid";
+    return normalize_steps_type_string(StepsTypeToString(st));
+}
+
+static std::string steps_type_string(const Steps* steps) {
+    if (!steps) return "invalid";
+    if (steps->m_StepsType == StepsType_Invalid && !steps->m_StepsTypeStr.empty()) {
+        return normalize_steps_type_string(steps->m_StepsTypeStr);
+    }
+    return steps_type_string(steps->m_StepsType);
 }
 
 static std::string diff_string(Difficulty d) {
@@ -776,8 +789,7 @@ static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Ste
     TimingData* const td = steps->GetTimingData();
     prepare_steps_for_metrics(steps, td);
 
-    const StepsType st = steps->m_StepsType;
-    const std::string st_str = steps_type_string(st);
+    const std::string st_str = steps_type_string(steps);
     const std::string diff_str = diff_string(steps->GetDifficulty());
 
     const TechCounts& tech = steps->GetTechCounts(PLAYER_1);
@@ -850,7 +862,7 @@ static Steps* select_steps(
     const std::string& difficulty_req,
     const std::string& description_req) {
     for (Steps* s : steps) {
-        std::string st = steps_type_string(s->m_StepsType);
+        std::string st = steps_type_string(s);
         std::string diff = diff_string(s->GetDifficulty());
         std::string desc = s->GetDescription();
         if (!steps_type_req.empty() && st != steps_type_req) continue;
@@ -910,7 +922,7 @@ std::vector<ChartMetrics> parse_all_charts_with_itgmania(
 
     const auto& all_steps = song.GetAllSteps();
     for (Steps* steps : all_steps) {
-        std::string st_str = steps_type_string(steps->m_StepsType);
+        std::string st_str = steps_type_string(steps);
         std::string diff_str = diff_string(steps->GetDifficulty());
         if (!steps_type_req.empty() && st_str != steps_type_req) continue;
         if (!difficulty_req.empty() && diff_str != difficulty_req) continue;

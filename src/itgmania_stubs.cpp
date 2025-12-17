@@ -748,25 +748,75 @@ bool GameManager::IsGameEnabled(const Game*) { return true; }
 int GameManager::GetIndexFromGame(const Game*) { return 0; }
 const Game* GameManager::GetGameFromIndex(int) { return nullptr; }
 const StepsTypeInfo& GameManager::GetStepsTypeInfo(StepsType st) {
-	static StepsTypeInfo info[] = {
-		{"dance-single", 4, true, StepsTypeCategory_Single},
-		{"dance-double", 8, true, StepsTypeCategory_Double},
-		{"lights-cabinet", 8, true, StepsTypeCategory_Single},
+	// Provide a complete StepsTypeInfo table so NotesLoaderSM/SSC can correctly
+	// parse and preserve steps types (e.g. dance-couple).
+	static constexpr int kNumCabinetLightTracks = 6; // matches ITGmania's NUM_CabinetLight
+	static const StepsTypeInfo infos[] = {
+		// dance
+		{ "dance-single", 4, true, StepsTypeCategory_Single },
+		{ "dance-double", 8, true, StepsTypeCategory_Double },
+		{ "dance-couple", 8, true, StepsTypeCategory_Couple },
+		{ "dance-solo", 6, true, StepsTypeCategory_Single },
+		{ "dance-threepanel", 3, true, StepsTypeCategory_Single },
+		{ "dance-routine", 8, false, StepsTypeCategory_Routine },
+		// pump
+		{ "pump-single", 5, true, StepsTypeCategory_Single },
+		{ "pump-halfdouble", 6, true, StepsTypeCategory_Double },
+		{ "pump-double", 10, true, StepsTypeCategory_Double },
+		{ "pump-couple", 10, true, StepsTypeCategory_Couple },
+		{ "pump-routine", 10, true, StepsTypeCategory_Routine },
+		// kb7
+		{ "kb7-single", 7, true, StepsTypeCategory_Single },
+		// ez2dancer
+		{ "ez2-single", 5, true, StepsTypeCategory_Single },
+		{ "ez2-double", 10, true, StepsTypeCategory_Double },
+		{ "ez2-real", 7, true, StepsTypeCategory_Single },
+		// parapara paradise
+		{ "para-single", 5, true, StepsTypeCategory_Single },
+		// ds3ddx
+		{ "ds3ddx-single", 8, true, StepsTypeCategory_Single },
+		// beatmania (called "bm" for backward compat)
+		{ "bm-single5", 6, true, StepsTypeCategory_Single },
+		{ "bm-versus5", 6, true, StepsTypeCategory_Single },
+		{ "bm-double5", 12, true, StepsTypeCategory_Double },
+		{ "bm-single7", 8, true, StepsTypeCategory_Single },
+		{ "bm-versus7", 8, true, StepsTypeCategory_Single },
+		{ "bm-double7", 16, true, StepsTypeCategory_Double },
+		// dance maniax
+		{ "maniax-single", 4, true, StepsTypeCategory_Single },
+		{ "maniax-double", 8, true, StepsTypeCategory_Double },
+		// technomotion
+		{ "techno-single4", 4, true, StepsTypeCategory_Single },
+		{ "techno-single5", 5, true, StepsTypeCategory_Single },
+		{ "techno-single8", 8, true, StepsTypeCategory_Single },
+		{ "techno-double4", 8, true, StepsTypeCategory_Double },
+		{ "techno-double5", 10, true, StepsTypeCategory_Double },
+		{ "techno-double8", 16, true, StepsTypeCategory_Double },
+		// pop'n music (called "pnm" for backward compat)
+		{ "pnm-five", 5, true, StepsTypeCategory_Single },
+		{ "pnm-nine", 9, true, StepsTypeCategory_Single },
+		// cabinet lights
+		{ "lights-cabinet", kNumCabinetLightTracks, false, StepsTypeCategory_Single },
+		// kickbox mania
+		{ "kickbox-human", 4, true, StepsTypeCategory_Single },
+		{ "kickbox-quadarm", 4, true, StepsTypeCategory_Single },
+		{ "kickbox-insect", 6, true, StepsTypeCategory_Single },
+		{ "kickbox-arachnid", 8, true, StepsTypeCategory_Single },
 	};
-	int idx = 0;
-	switch (st) {
-		case StepsType_dance_single: idx = 0; break;
-		case StepsType_dance_double: idx = 1; break;
-		case StepsType_lights_cabinet: idx = 2; break;
-		default: idx = 0; break;
-	}
-	return info[idx];
+	static_assert(static_cast<int>(sizeof(infos) / sizeof(infos[0])) == static_cast<int>(NUM_StepsType),
+	              "StepsTypeInfo table out of sync with StepsType enum");
+	static const StepsTypeInfo invalid_info = { "invalid", 0, false, StepsTypeCategory_Single };
+	const int sti = static_cast<int>(st);
+	if (sti < 0 || sti >= static_cast<int>(NUM_StepsType)) return invalid_info;
+	return infos[sti];
 }
 StepsType GameManager::StringToStepsType(RString s) {
 	s.MakeLower();
-	if (s == "dance-single" || s == "dance_single") return StepsType_dance_single;
-	if (s == "dance-double" || s == "dance_double") return StepsType_dance_double;
-	if (s == "lights-cabinet" || s == "lights_cabinet") return StepsType_lights_cabinet;
+	s.Replace('_', '-');
+	const int num_steps_types = static_cast<int>(NUM_StepsType);
+	for (int i = 0; i < num_steps_types; ++i) {
+		if (GetStepsTypeInfo(static_cast<StepsType>(i)).szName == s) return static_cast<StepsType>(i);
+	}
 	return StepsType_Invalid;
 }
 const Game* GameManager::StringToGame(RString) { return nullptr; }
