@@ -6,7 +6,7 @@
 
 #include "itgmania_adapter.h"
 
-static constexpr std::string_view kVersion = "0.1.2";
+static constexpr std::string_view kVersion = "0.1.3";
 
 static std::string json_escape(std::string_view s) {
     std::string out;
@@ -150,7 +150,7 @@ static void emit_json_stub(
 }
 
 static void emit_chart_json_header(std::ostream& out, const ChartMetrics& m, const std::string& ind2) {
-    out << ind2 << "\"status\": \"ok\",\n";
+    out << ind2 << "\"status\": \"" << json_escape(m.status) << "\",\n";
     out << ind2 << "\"simfile\": \"" << json_escape(m.simfile) << "\",\n";
     out << ind2 << "\"title\": \"" << json_escape(m.title) << "\",\n";
     out << ind2 << "\"subtitle\": \"" << json_escape(m.subtitle) << "\",\n";

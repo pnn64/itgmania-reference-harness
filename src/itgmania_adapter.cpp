@@ -797,8 +797,13 @@ static RadarCountsOut get_radar_counts(const RadarValues& radar) {
     return out;
 }
 
+static bool steps_supports_itgmania_notedata(const Steps* steps) {
+    if (!steps || !GAMEMAN) return false;
+    return GAMEMAN->GetStepsTypeInfo(steps->m_StepsType).iNumTracks > 0;
+}
+
 static void prepare_steps_for_metrics(Steps* steps, TimingData* timing) {
-    timing->TidyUpData(false);
+    (void)timing;
     steps->CalculateStepStats(0.0f);
     steps->CalculateGrooveStatsHash();
     steps->CalculateTechCounts();
@@ -818,9 +823,13 @@ static MeasureStatsOut get_measure_stats(
     std::vector<int> lua_notes_pm,
     std::vector<double> lua_nps_pm,
     std::vector<bool> lua_equally_spaced,
-    double lua_peak_nps) {
+    double lua_peak_nps,
+    bool allow_steps_fallback) {
     MeasureStatsOut out;
     if (lua_notes_pm.empty()) {
+        if (!allow_steps_fallback || !steps) {
+            return out;
+        }
         const std::vector<int>& npm = steps->GetNotesPerMeasure(PLAYER_1);
         out.notes_per_measure.assign(npm.begin(), npm.end());
 
@@ -852,6 +861,12 @@ static double get_duration_seconds(Steps* steps, TimingData* timing) {
     return timing->GetElapsedTimeFromBeat(last_beat);
 }
 
+static double get_duration_seconds_from_measure_count(TimingData* timing, size_t measure_count) {
+    if (!timing || measure_count == 0) return 0.0;
+    const float end_beat = static_cast<float>(measure_count) * 4.0f;
+    return timing->GetElapsedTimeFromBeat(end_beat);
+}
+
 static void fill_timing_tables(ChartMetrics& out, TimingData* td) {
     out.beat0_offset_seconds = static_cast<double>(td->m_fBeat0OffsetInSeconds);
     out.beat0_group_offset_seconds = static_cast<double>(td->m_fBeat0GroupOffsetInSeconds);
@@ -879,17 +894,18 @@ static void fill_tech_counts(ChartMetrics& out, const TechCounts& tech) {
 
 static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Steps* steps, const Song& song) {
     TimingData* const td = steps->GetTimingData();
-    prepare_steps_for_metrics(steps, td);
+    td->TidyUpData(false);
 
     const std::string st_str = steps_type_string(steps);
     const std::string diff_str = diff_string(steps->GetDifficulty());
 
-    const TechCounts& tech = steps->GetTechCounts(PLAYER_1);
-
-    const RadarValues radar = steps->GetRadarValues(PLAYER_1);
-    const RadarCountsOut radar_counts = get_radar_counts(radar);
+    const bool can_compute_notedata_metrics = steps_supports_itgmania_notedata(steps);
+    if (can_compute_notedata_metrics) {
+        prepare_steps_for_metrics(steps, td);
+    }
 
     ChartMetrics out;
+    out.status = can_compute_notedata_metrics ? "ok" : "unsupported_steps_type";
     out.simfile = simfile_path;
     out.title = song.GetDisplayMainTitle();
     out.subtitle = song.GetDisplaySubTitle();
@@ -915,24 +931,23 @@ static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Ste
     out.bpms = bpm_string_from_timing(td);
     get_bpm_ranges_like_simply_love(steps, 1.0, out.bpm_min, out.bpm_max, out.display_bpm_min, out.display_bpm_max,
                                    out.display_bpm);
-    out.duration_seconds = get_duration_seconds(steps, td);
 
     const MeasureStatsOut measures = get_measure_stats(
-        steps, std::move(lua_notes_pm), std::move(lua_nps_pm), std::move(lua_equally_spaced), lua_peak_nps);
+        steps, std::move(lua_notes_pm), std::move(lua_nps_pm), std::move(lua_equally_spaced), lua_peak_nps,
+        can_compute_notedata_metrics);
     out.total_steps = measures.total_steps;
     out.notes_per_measure = measures.notes_per_measure;
     out.nps_per_measure = measures.nps_per_measure;
     out.equally_spaced_per_measure = measures.equally_spaced_per_measure;
     out.peak_nps = measures.peak_nps;
 
+    if (can_compute_notedata_metrics) {
+        out.duration_seconds = get_duration_seconds(steps, td);
+    } else {
+        out.duration_seconds = get_duration_seconds_from_measure_count(td, out.notes_per_measure.size());
+    }
+
     out.stream_sequences = std::move(stream_sequences);
-    out.holds = radar_counts.holds;
-    out.mines = radar_counts.mines;
-    out.rolls = radar_counts.rolls;
-    out.taps_and_holds = radar_counts.taps_and_holds;
-    out.notes = radar_counts.notes;
-    out.lifts = radar_counts.lifts;
-    out.fakes = radar_counts.fakes;
     if (breakdown_levels.size() == 4) {
         out.streams_breakdown_level1 = breakdown_levels[1];
         out.streams_breakdown_level2 = breakdown_levels[2];
@@ -941,10 +956,24 @@ static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Ste
     out.total_stream_measures = stream_measures;
     out.total_break_measures = break_measures;
 
-    out.jumps = radar_counts.jumps;
-    out.hands = radar_counts.hands;
-    out.quads = radar_counts.quads;
-    fill_tech_counts(out, tech);
+    if (can_compute_notedata_metrics) {
+        const TechCounts& tech = steps->GetTechCounts(PLAYER_1);
+        const RadarValues radar = steps->GetRadarValues(PLAYER_1);
+        const RadarCountsOut radar_counts = get_radar_counts(radar);
+
+        out.holds = radar_counts.holds;
+        out.mines = radar_counts.mines;
+        out.rolls = radar_counts.rolls;
+        out.taps_and_holds = radar_counts.taps_and_holds;
+        out.notes = radar_counts.notes;
+        out.lifts = radar_counts.lifts;
+        out.fakes = radar_counts.fakes;
+        out.jumps = radar_counts.jumps;
+        out.hands = radar_counts.hands;
+        out.quads = radar_counts.quads;
+
+        fill_tech_counts(out, tech);
+    }
     fill_timing_tables(out, td);
     return out;
 }

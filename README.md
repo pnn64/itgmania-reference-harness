@@ -110,6 +110,7 @@ Print one line per chart with steps type, meter, difficulty, and the Simply Love
 - Difficulty names use ITGMania/StepMania enums (`beginner`, `easy`, `medium`, `hard`, `challenge`, `edit`).
 - Edit charts can have multiple entries; use the `description` field to identify/select one.
 - If the requested chart isn't found, the tool prints a JSON stub (`"status": "stub"`).
+- Some charts may have unsupported `steps_type` values (e.g. `para-versus`); these are returned with `"status": "unsupported_steps_type"` and omit ITGMania-derived notedata metrics (radar/tech).
 - `hash_bpms` is the BPMS string used by Simply Love when computing `hash`.
 - JSON is written to stdout.
 

@@ -25,6 +25,7 @@ struct StreamSequenceOut {
 };
 
 struct ChartMetrics {
+    std::string status = "ok";
     std::string simfile;
     std::string hash;
     std::string title;
