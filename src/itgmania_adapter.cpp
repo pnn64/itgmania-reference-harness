@@ -464,11 +464,102 @@ static int lua_ivalues(lua_State* L) {
     return 1;
 }
 
+static void extract_sl_hash_bpms(lua_State* L,
+                                 LuaStepsCtx* ctx,
+                                 const std::string& steps_type,
+                                 const std::string& difficulty,
+                                 const std::string& description,
+                                 std::string* out_hash_bpms) {
+    if (!out_hash_bpms) return;
+    out_hash_bpms->clear();
+
+    const int top = lua_gettop(L);
+
+    lua_getglobal(L, "ParseChartInfo");
+    if (!lua_isfunction(L, -1)) {
+        lua_settop(L, top);
+        return;
+    }
+    const int parse_idx = lua_gettop(L);
+
+    int ref_get_simfile_string = LUA_NOREF;
+    int ref_get_simfile_chart_string = LUA_NOREF;
+
+    for (int i = 1;; ++i) {
+        const char* upname = lua_getupvalue(L, parse_idx, i);
+        if (!upname) break;
+
+        const std::string_view name_sv{upname};
+        if (name_sv == "GetSimfileString") {
+            ref_get_simfile_string = luaL_ref(L, LUA_REGISTRYINDEX);
+            continue;
+        }
+        if (name_sv == "GetSimfileChartString") {
+            ref_get_simfile_chart_string = luaL_ref(L, LUA_REGISTRYINDEX);
+            continue;
+        }
+        lua_pop(L, 1);
+    }
+
+    lua_pop(L, 1); // pop ParseChartInfo
+
+    auto cleanup = [&]() {
+        if (ref_get_simfile_string != LUA_NOREF) {
+            luaL_unref(L, LUA_REGISTRYINDEX, ref_get_simfile_string);
+        }
+        if (ref_get_simfile_chart_string != LUA_NOREF) {
+            luaL_unref(L, LUA_REGISTRYINDEX, ref_get_simfile_chart_string);
+        }
+        lua_settop(L, top);
+    };
+
+    if (ref_get_simfile_string == LUA_NOREF || ref_get_simfile_chart_string == LUA_NOREF) {
+        cleanup();
+        return;
+    }
+
+    lua_rawgeti(L, LUA_REGISTRYINDEX, ref_get_simfile_string);
+    push_steps_userdata(L, ctx);
+    if (lua_pcall(L, 1, 2, 0) != 0) {
+        std::fprintf(stderr, "lua GetSimfileString error: %s\n", lua_tostring(L, -1));
+        cleanup();
+        return;
+    }
+    const std::string simfile_string = lua_tostring(L, -2) ? lua_tostring(L, -2) : "";
+    const std::string file_type = lua_tostring(L, -1) ? lua_tostring(L, -1) : "";
+    lua_pop(L, 2);
+
+    if (simfile_string.empty() || file_type.empty()) {
+        cleanup();
+        return;
+    }
+
+    lua_rawgeti(L, LUA_REGISTRYINDEX, ref_get_simfile_chart_string);
+    lua_pushlstring(L, simfile_string.data(), simfile_string.size());
+    lua_pushstring(L, steps_type.c_str());
+    lua_pushstring(L, difficulty.c_str());
+    lua_pushstring(L, description.c_str());
+    lua_pushstring(L, file_type.c_str());
+    if (lua_pcall(L, 5, 2, 0) != 0) {
+        std::fprintf(stderr, "lua GetSimfileChartString error: %s\n", lua_tostring(L, -1));
+        cleanup();
+        return;
+    }
+
+    if (lua_isstring(L, -1)) {
+        *out_hash_bpms = lua_tostring(L, -1) ? lua_tostring(L, -1) : "";
+    }
+    lua_pop(L, 2);
+
+    cleanup();
+}
+
 static std::string compute_hash_with_lua(const std::string& simfile_path,
                                         const std::string& steps_type,
                                         const std::string& difficulty,
                                         const std::string& description,
                                         TimingData* timing,
+                                        std::string* out_hash_bpms,
                                         std::string* breakdown_text,
                                         std::vector<std::string>* breakdown_levels,
                                         int* stream_measures,
@@ -534,6 +625,7 @@ static std::string compute_hash_with_lua(const std::string& simfile_path,
     }
 
     LuaStepsCtx ctx{simfile_path, steps_type, difficulty, description, timing};
+    extract_sl_hash_bpms(L, &ctx, steps_type, difficulty, description, out_hash_bpms);
     // Push an error handler to capture Lua stack traces.
     lua_getglobal(L, "debug");
     lua_getfield(L, -1, "traceback");
@@ -813,6 +905,7 @@ static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Ste
     int break_measures = 0;
     std::vector<StreamSequenceOut> stream_sequences;
     out.hash = compute_hash_with_lua(simfile_path, st_str, diff_str, steps->GetDescription(), td,
+                                     &out.hash_bpms,
                                      &out.streams_breakdown, &breakdown_levels, &stream_measures, &break_measures,
                                      &stream_sequences,
                                      &lua_notes_pm, &lua_nps_pm, &lua_equally_spaced, &lua_peak_nps);

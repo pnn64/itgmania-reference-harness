@@ -36,6 +36,7 @@ struct ChartMetrics {
     std::string difficulty;
     int meter = -1;
     std::string bpms;
+    std::string hash_bpms;
     double bpm_min = 0.0;
     double bpm_max = 0.0;
     std::string display_bpm;

@@ -6,7 +6,7 @@
 
 #include "itgmania_adapter.h"
 
-static constexpr std::string_view kVersion = "0.1.1";
+static constexpr std::string_view kVersion = "0.1.2";
 
 static std::string json_escape(std::string_view s) {
     std::string out;
@@ -114,6 +114,7 @@ static void emit_json_stub(
     out << "  \"difficulty\": \"" << json_escape(difficulty) << "\",\n";
     out << "  \"meter\": null,\n";
     out << "  \"bpms\": \"\",\n";
+    out << "  \"hash_bpms\": \"\",\n";
     out << "  \"bpm_min\": null,\n";
     out << "  \"bpm_max\": null,\n";
     out << "  \"display_bpm\": \"\",\n";
@@ -160,6 +161,7 @@ static void emit_chart_json_header(std::ostream& out, const ChartMetrics& m, con
     out << ind2 << "\"difficulty\": \"" << json_escape(m.difficulty) << "\",\n";
     out << ind2 << "\"meter\": " << m.meter << ",\n";
     out << ind2 << "\"bpms\": \"" << json_escape(m.bpms) << "\",\n";
+    out << ind2 << "\"hash_bpms\": \"" << json_escape(m.hash_bpms) << "\",\n";
     out << ind2 << "\"bpm_min\": " << m.bpm_min << ",\n";
     out << ind2 << "\"bpm_max\": " << m.bpm_max << ",\n";
     out << ind2 << "\"display_bpm\": \"" << json_escape(m.display_bpm) << "\",\n";

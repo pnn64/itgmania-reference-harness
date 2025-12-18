@@ -7,7 +7,7 @@ CLI that loads a simfile (e.g. `.sm` / `.ssc`) using ITGMania parsing code and p
 - Parse simfiles via ITGMania `Song`/`Steps` loaders
 - Compute per-chart metrics:
   - Metadata: title/subtitle/artist, step artist, steps type, difficulty, meter
-  - BPMs: raw BPM string, actual min/max, display BPM string + min/max (Simply Love behavior)
+  - BPMs: ITGMania timing BPMS string, `hash_bpms` as parsed by Simply Love for hashing, actual min/max, display BPM string + min/max (Simply Love behavior)
   - Duration, notes-per-measure, NPS-per-measure, peak NPS
   - Simply Love stream breakdown strings + raw stream/break sequences
   - Tech counts (crossovers, footswitches, sideswitches, jacks, brackets, doublesteps)
@@ -108,6 +108,7 @@ Print one line per chart with steps type, meter, difficulty, and the Simply Love
 - Difficulty names use ITGMania/StepMania enums (`beginner`, `easy`, `medium`, `hard`, `challenge`, `edit`).
 - Edit charts can have multiple entries; use the `description` field to identify/select one.
 - If the requested chart isn't found, the tool prints a JSON stub (`"status": "stub"`).
+- `hash_bpms` is the BPMS string used by Simply Love when computing `hash`.
 - JSON is written to stdout.
 
 ## Output format
