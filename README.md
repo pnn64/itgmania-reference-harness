@@ -55,9 +55,11 @@ cmake -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release .. && cmake ..
 From the repo root after configuring ITGMania:
 
 ```bash
-cmake -S . -B build
-cmake --build build
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
+cmake --build build -j
 ```
+
+This builds a "mostly static" Linux binary by linking the C++ runtime (`libstdc++`/`libgcc`) statically. If you prefer a normal dynamic build, omit `-DCMAKE_EXE_LINKER_FLAGS=...`.
 
 If you request chart parsing without `USE_ITGMANIA_SOURCES=ON` (or without linking a prebuilt ITGMania), the binary builds but typically returns `status: "stub"` because the full parsing/runtime pieces aren't present.
 
