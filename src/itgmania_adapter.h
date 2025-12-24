@@ -24,6 +24,60 @@ struct StreamSequenceOut {
     bool is_break = false;
 };
 
+struct StepParityLayoutOut {
+    std::vector<std::vector<double>> columns;
+    std::vector<int> up_arrows;
+    std::vector<int> down_arrows;
+    std::vector<int> side_arrows;
+};
+
+struct StepParityRowOut {
+    int row_index = 0;
+    double beat = 0.0;
+    double second = 0.0;
+    int note_count = 0;
+    std::vector<int> note_types;
+    std::vector<int> hold_types;
+    std::vector<int> columns;
+    std::vector<int> where_feet;
+    std::vector<int> hold_tails;
+    std::vector<double> mines;
+    std::vector<double> fake_mines;
+};
+
+struct StepParityTechRowOut {
+    int row_index = 0;
+    double elapsed = 0.0;
+    int jacks = 0;
+    int doublesteps = 0;
+    int brackets = 0;
+    int footswitches = 0;
+    int up_footswitches = 0;
+    int down_footswitches = 0;
+    int sideswitches = 0;
+    int crossovers = 0;
+    int half_crossovers = 0;
+    int full_crossovers = 0;
+};
+
+struct StepParityCostRowOut {
+    int row_index = 0;
+    double elapsed = 0.0;
+    double total = 0.0;
+    std::vector<double> costs;
+};
+
+struct StepParityTraceOut {
+    std::string status;
+    std::vector<std::string> foot_labels;
+    std::vector<std::string> note_type_labels;
+    std::vector<std::string> cost_labels;
+    StepParityLayoutOut layout;
+    std::vector<StepParityRowOut> rows;
+    std::vector<StepParityTechRowOut> tech_rows;
+    std::vector<StepParityCostRowOut> cost_rows;
+};
+
 struct ChartMetrics {
     std::string status = "ok";
     std::string simfile;
@@ -80,6 +134,7 @@ struct ChartMetrics {
     std::vector<std::vector<double>> timing_speeds;
     std::vector<std::vector<double>> timing_scrolls;
     std::vector<std::vector<double>> timing_fakes;
+    std::optional<StepParityTraceOut> step_parity_trace;
 };
 
 std::optional<ChartMetrics> parse_chart_with_itgmania(
@@ -94,3 +149,4 @@ std::vector<ChartMetrics> parse_all_charts_with_itgmania(
     const std::string& description);
 
 void init_itgmania_runtime(int argc, char** argv);
+void set_step_parity_trace_enabled(bool enabled);

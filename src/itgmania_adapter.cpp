@@ -19,6 +19,7 @@ extern "C" {
 #include <filesystem>
 #include <optional>
 #include <cstdio>
+#include <cmath>
 #include <tomcrypt.h>
 
 #include "embedded_lua.h"
@@ -52,9 +53,16 @@ extern "C" {
 #include "Song.h"
 #include "Steps.h"
 #include "Style.h"
+#include "StepParityCost.h"
 #include "TechCounts.h"
 #include "ThemeManager.h"
 #include "TimingData.h"
+
+static bool g_enable_step_parity_trace = false;
+
+void set_step_parity_trace_enabled(bool enabled) {
+    g_enable_step_parity_trace = enabled;
+}
 
 static void init_singletons(int argc, char** argv) {
     static bool initialized = false;
@@ -892,6 +900,909 @@ static void fill_tech_counts(ChartMetrics& out, const TechCounts& tech) {
     out.tech.doublesteps = static_cast<int>(tech[TechCountsCategory_Doublesteps]);
 }
 
+constexpr float kJackCutoffSeconds = 0.176f;
+constexpr float kFootswitchCutoffSeconds = 0.3f;
+constexpr float kDoublestepCutoffSeconds = 0.235f;
+
+static bool is_footswitch(int column, const StepParity::Row& current_row, const StepParity::Row& previous_row, float elapsed_time) {
+    if (current_row.columns[column] == StepParity::NONE || previous_row.columns[column] == StepParity::NONE) {
+        return false;
+    }
+    if (previous_row.columns[column] != current_row.columns[column]
+        && StepParity::OTHER_PART_OF_FOOT[previous_row.columns[column]] != current_row.columns[column]
+        && elapsed_time < kFootswitchCutoffSeconds) {
+        return true;
+    }
+    return false;
+}
+
+static int count_notes_in_row(const StepParity::Row& row) {
+    int count = 0;
+    for (const auto& note : row.notes) {
+        if (note.type != TapNoteType_Empty) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+namespace {
+template <typename T>
+bool is_empty(const std::vector<T>& vec, int column_count) {
+    for (int i = 0; i < column_count; ++i) {
+        if (static_cast<int>(vec[i]) != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+struct StepParityCostTraceCalculator {
+    explicit StepParityCostTraceCalculator(const StepParity::StageLayout& layout_in) : layout(layout_in) {}
+
+    float get_action_cost_breakdown(
+        StepParity::State* initial_state,
+        StepParity::State* result_state,
+        std::vector<StepParity::Row>& rows,
+        int row_index,
+        float elapsed_time,
+        std::vector<float>& out_costs) const {
+        StepParity::Row& row = rows[row_index];
+        const int column_count = row.columnCount;
+
+        out_costs.assign(StepParity::NUM_Cost, 0.0f);
+        float total = 0.0f;
+
+        int left_heel = StepParity::INVALID_COLUMN;
+        int left_toe = StepParity::INVALID_COLUMN;
+        int right_heel = StepParity::INVALID_COLUMN;
+        int right_toe = StepParity::INVALID_COLUMN;
+
+        for (int i = 0; i < column_count; i++) {
+            switch (result_state->columns[i]) {
+                case StepParity::NONE:
+                    break;
+                case StepParity::LEFT_HEEL:
+                    left_heel = i;
+                    break;
+                case StepParity::LEFT_TOE:
+                    left_toe = i;
+                    break;
+                case StepParity::RIGHT_HEEL:
+                    right_heel = i;
+                    break;
+                case StepParity::RIGHT_TOE:
+                    right_toe = i;
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        const bool moved_left =
+            result_state->didTheFootMove[StepParity::LEFT_HEEL] ||
+            result_state->didTheFootMove[StepParity::LEFT_TOE];
+
+        const bool moved_right =
+            result_state->didTheFootMove[StepParity::RIGHT_HEEL] ||
+            result_state->didTheFootMove[StepParity::RIGHT_TOE];
+
+        const bool did_jump =
+            ((initial_state->didTheFootMove[StepParity::LEFT_HEEL] &&
+              !initial_state->isTheFootHolding[StepParity::LEFT_HEEL]) ||
+             (initial_state->didTheFootMove[StepParity::LEFT_TOE] &&
+              !initial_state->isTheFootHolding[StepParity::LEFT_TOE])) &&
+            ((initial_state->didTheFootMove[StepParity::RIGHT_HEEL] &&
+              !initial_state->isTheFootHolding[StepParity::RIGHT_HEEL]) ||
+             (initial_state->didTheFootMove[StepParity::RIGHT_TOE] &&
+              !initial_state->isTheFootHolding[StepParity::RIGHT_TOE]));
+
+        const bool jacked_left = did_jack_left(initial_state, result_state, left_heel, left_toe, moved_left, did_jump, column_count);
+        const bool jacked_right = did_jack_right(initial_state, result_state, right_heel, right_toe, moved_right, did_jump, column_count);
+
+        out_costs[StepParity::COST_MINE] = calc_mine_cost(initial_state, result_state, row, column_count);
+        out_costs[StepParity::COST_HOLDSWITCH] = calc_hold_switch_cost(initial_state, result_state, row, column_count);
+        out_costs[StepParity::COST_BRACKETTAP] = calc_bracket_tap_cost(initial_state, result_state, row, left_heel, left_toe, right_heel, right_toe, elapsed_time, column_count);
+        out_costs[StepParity::COST_BRACKETJACK] = calc_bracket_jack_cost(initial_state, result_state, rows, row_index, moved_left, moved_right, jacked_left, jacked_right, did_jump, column_count);
+        out_costs[StepParity::COST_DOUBLESTEP] = calc_doublestep_cost(initial_state, result_state, rows, row_index, moved_left, moved_right, jacked_left, jacked_right, did_jump, column_count);
+        out_costs[StepParity::COST_SLOW_BRACKET] = calc_slow_bracket_cost(row, moved_left, moved_right, elapsed_time);
+        out_costs[StepParity::COST_TWISTED_FOOT] = calc_twisted_foot_cost(result_state);
+        out_costs[StepParity::COST_FACING] = calc_facing_costs(initial_state, result_state, column_count);
+        out_costs[StepParity::COST_SPIN] = calc_spin_costs(initial_state, result_state, column_count);
+        out_costs[StepParity::COST_FOOTSWITCH] = calc_footswitch_cost(initial_state, result_state, row, elapsed_time, column_count);
+        out_costs[StepParity::COST_SIDESWITCH] = calc_sideswitch_cost(initial_state, result_state, column_count);
+        out_costs[StepParity::COST_MISSED_FOOTSWITCH] = calc_missed_footswitch_cost(row, jacked_left, jacked_right, column_count);
+        out_costs[StepParity::COST_JACK] = calc_jack_cost(moved_left, moved_right, jacked_left, jacked_right, elapsed_time, column_count);
+        out_costs[StepParity::COST_DISTANCE] = calc_big_movements_quickly_cost(initial_state, result_state, elapsed_time, column_count);
+
+        for (int i = 0; i < StepParity::NUM_Cost; i++) {
+            if (i == StepParity::COST_TOTAL) {
+                continue;
+            }
+            total += out_costs[i];
+        }
+        out_costs[StepParity::COST_TOTAL] = total;
+
+        return total;
+    }
+
+  private:
+    const StepParity::StageLayout& layout;
+
+    float calc_mine_cost(StepParity::State* initial_state, StepParity::State* result_state, const StepParity::Row& row, int column_count) const {
+        (void)initial_state;
+        float cost = 0.0f;
+        for (int i = 0; i < column_count; i++) {
+            if (result_state->combinedColumns[i] != StepParity::NONE && row.mines[i] != 0.0f) {
+                cost += StepParity::MINE;
+                break;
+            }
+        }
+        return cost;
+    }
+
+    float calc_hold_switch_cost(StepParity::State* initial_state, StepParity::State* result_state, const StepParity::Row& row, int column_count) const {
+        float cost = 0.0f;
+        for (int c = 0; c < column_count; c++) {
+            if (row.holds[c].type == TapNoteType_Empty) {
+                continue;
+            }
+            if (
+                ((result_state->combinedColumns[c] == StepParity::LEFT_HEEL ||
+                  result_state->combinedColumns[c] == StepParity::LEFT_TOE) &&
+                 initial_state->combinedColumns[c] != StepParity::LEFT_TOE &&
+                 initial_state->combinedColumns[c] != StepParity::LEFT_HEEL) ||
+                ((result_state->combinedColumns[c] == StepParity::RIGHT_HEEL ||
+                  result_state->combinedColumns[c] == StepParity::RIGHT_TOE) &&
+                 initial_state->combinedColumns[c] != StepParity::RIGHT_TOE &&
+                 initial_state->combinedColumns[c] != StepParity::RIGHT_HEEL)) {
+                const int previous_foot = initial_state->whereTheFeetAre[result_state->combinedColumns[c]];
+                cost += StepParity::HOLDSWITCH *
+                        (previous_foot == StepParity::INVALID_COLUMN
+                            ? 1.0f
+                            : std::sqrt(layout.getDistanceSq(c, previous_foot)));
+            }
+        }
+        return cost;
+    }
+
+    float calc_bracket_tap_cost(
+        StepParity::State* initial_state,
+        StepParity::State* result_state,
+        const StepParity::Row& row,
+        int left_heel,
+        int left_toe,
+        int right_heel,
+        int right_toe,
+        float elapsed_time,
+        int column_count) const {
+        (void)result_state;
+        (void)column_count;
+        float cost = 0.0f;
+        if (left_heel != StepParity::INVALID_COLUMN && left_toe != StepParity::INVALID_COLUMN) {
+            float jack_penalty = 1.0f;
+            if (
+                initial_state->didTheFootMove[StepParity::LEFT_HEEL] ||
+                initial_state->didTheFootMove[StepParity::LEFT_TOE]) {
+                jack_penalty = 1.0f / elapsed_time;
+            }
+            if (
+                row.holds[left_heel].type != TapNoteType_Empty &&
+                row.holds[left_toe].type == TapNoteType_Empty) {
+                cost += StepParity::BRACKETTAP * jack_penalty;
+            }
+            if (
+                row.holds[left_toe].type != TapNoteType_Empty &&
+                row.holds[left_heel].type == TapNoteType_Empty) {
+                cost += StepParity::BRACKETTAP * jack_penalty;
+            }
+        }
+
+        if (right_heel != StepParity::INVALID_COLUMN && right_toe != StepParity::INVALID_COLUMN) {
+            float jack_penalty = 1.0f;
+            if (
+                initial_state->didTheFootMove[StepParity::RIGHT_TOE] ||
+                initial_state->didTheFootMove[StepParity::RIGHT_HEEL]) {
+                jack_penalty = 1.0f / elapsed_time;
+            }
+            if (
+                row.holds[right_heel].type != TapNoteType_Empty &&
+                row.holds[right_toe].type == TapNoteType_Empty) {
+                cost += StepParity::BRACKETTAP * jack_penalty;
+            }
+            if (
+                row.holds[right_toe].type != TapNoteType_Empty &&
+                row.holds[right_heel].type == TapNoteType_Empty) {
+                cost += StepParity::BRACKETTAP * jack_penalty;
+            }
+        }
+        return cost;
+    }
+
+    float calc_bracket_jack_cost(
+        StepParity::State* initial_state,
+        StepParity::State* result_state,
+        std::vector<StepParity::Row>& rows,
+        int row_index,
+        bool moved_left,
+        bool moved_right,
+        bool jacked_left,
+        bool jacked_right,
+        bool did_jump,
+        int column_count) const {
+        (void)initial_state;
+        (void)rows;
+        (void)row_index;
+        float cost = 0.0f;
+        if (
+            moved_left != moved_right &&
+            (moved_left || moved_right) &&
+            is_empty(result_state->holdFeet, column_count) &&
+            !did_jump) {
+            if (
+                jacked_left &&
+                result_state->didTheFootMove[StepParity::LEFT_HEEL] &&
+                result_state->didTheFootMove[StepParity::LEFT_TOE]) {
+                cost += StepParity::BRACKETJACK;
+            }
+            if (
+                jacked_right &&
+                result_state->didTheFootMove[StepParity::RIGHT_HEEL] &&
+                result_state->didTheFootMove[StepParity::RIGHT_TOE]) {
+                cost += StepParity::BRACKETJACK;
+            }
+        }
+        return cost;
+    }
+
+    float calc_doublestep_cost(
+        StepParity::State* initial_state,
+        StepParity::State* result_state,
+        std::vector<StepParity::Row>& rows,
+        int row_index,
+        bool moved_left,
+        bool moved_right,
+        bool jacked_left,
+        bool jacked_right,
+        bool did_jump,
+        int column_count) const {
+        float cost = 0.0f;
+        if (
+            moved_left != moved_right &&
+            (moved_left || moved_right) &&
+            is_empty(result_state->holdFeet, column_count) &&
+            !did_jump) {
+            const bool doublestepped = did_double_step(initial_state, result_state, rows, row_index, moved_left, jacked_left, moved_right, jacked_right, column_count);
+            if (doublestepped) {
+                cost += StepParity::DOUBLESTEP;
+            }
+        }
+        return cost;
+    }
+
+    float calc_slow_bracket_cost(const StepParity::Row& row, bool moved_left, bool moved_right, float elapsed_time) const {
+        float cost = 0.0f;
+        if (elapsed_time > StepParity::SLOW_BRACKET_THRESHOLD && moved_left != moved_right &&
+            std::count_if(row.notes.begin(), row.notes.end(), [](StepParity::IntermediateNoteData note) {
+                return note.type != TapNoteType_Empty;
+            }) >= 2) {
+            const float timediff = elapsed_time - StepParity::SLOW_BRACKET_THRESHOLD;
+            cost += timediff * StepParity::SLOW_BRACKET;
+        }
+        return cost;
+    }
+
+    float calc_twisted_foot_cost(StepParity::State* result_state) const {
+        float cost = 0.0f;
+        const int left_heel = result_state->whatNoteTheFootIsHitting[StepParity::LEFT_HEEL];
+        const int left_toe = result_state->whatNoteTheFootIsHitting[StepParity::LEFT_TOE];
+        const int right_heel = result_state->whatNoteTheFootIsHitting[StepParity::RIGHT_HEEL];
+        const int right_toe = result_state->whatNoteTheFootIsHitting[StepParity::RIGHT_TOE];
+
+        const StepParity::StagePoint left_pos = layout.averagePoint(left_heel, left_toe);
+        const StepParity::StagePoint right_pos = layout.averagePoint(right_heel, right_toe);
+
+        const bool crossed_over = right_pos.x < left_pos.x;
+        const bool right_backwards = right_heel != StepParity::INVALID_COLUMN && right_toe != StepParity::INVALID_COLUMN
+            ? layout.columns[right_toe].y < layout.columns[right_heel].y
+            : false;
+        const bool left_backwards = left_heel != StepParity::INVALID_COLUMN && left_toe != StepParity::INVALID_COLUMN
+            ? layout.columns[left_toe].y < layout.columns[left_heel].y
+            : false;
+
+        if (!crossed_over && (right_backwards || left_backwards)) {
+            cost += StepParity::TWISTED_FOOT;
+        }
+        return cost;
+    }
+
+    float calc_missed_footswitch_cost(const StepParity::Row& row, bool jacked_left, bool jacked_right, int column_count) const {
+        (void)column_count;
+        float cost = 0.0f;
+        if ((jacked_left || jacked_right) &&
+            (std::any_of(row.mines.begin(), row.mines.end(), [](float mine) { return mine != 0.0f; }) ||
+             std::any_of(row.fakeMines.begin(), row.fakeMines.end(), [](float mine) { return mine != 0.0f; }))) {
+            cost += StepParity::MISSED_FOOTSWITCH;
+        }
+        return cost;
+    }
+
+    float calc_facing_costs(StepParity::State* initial_state, StepParity::State* result_state, int column_count) const {
+        float cost = 0.0f;
+
+        int end_left_heel = StepParity::INVALID_COLUMN;
+        int end_left_toe = StepParity::INVALID_COLUMN;
+        int end_right_heel = StepParity::INVALID_COLUMN;
+        int end_right_toe = StepParity::INVALID_COLUMN;
+
+        for (int i = 0; i < column_count; i++) {
+            switch (result_state->combinedColumns[i]) {
+                case StepParity::NONE:
+                    break;
+                case StepParity::LEFT_HEEL:
+                    end_left_heel = i;
+                    break;
+                case StepParity::LEFT_TOE:
+                    end_left_toe = i;
+                    break;
+                case StepParity::RIGHT_HEEL:
+                    end_right_heel = i;
+                    break;
+                case StepParity::RIGHT_TOE:
+                    end_right_toe = i;
+                default:
+                    break;
+            }
+        }
+
+        if (end_left_toe == StepParity::INVALID_COLUMN) end_left_toe = end_left_heel;
+        if (end_right_toe == StepParity::INVALID_COLUMN) end_right_toe = end_right_heel;
+
+        const float heel_facing =
+            end_left_heel != StepParity::INVALID_COLUMN && end_right_heel != StepParity::INVALID_COLUMN
+                ? layout.getXDifference(end_left_heel, end_right_heel)
+                : 0.0f;
+        const float toe_facing =
+            end_left_toe != StepParity::INVALID_COLUMN && end_right_toe != StepParity::INVALID_COLUMN
+                ? layout.getXDifference(end_left_toe, end_right_toe)
+                : 0.0f;
+        const float left_facing =
+            end_left_heel != StepParity::INVALID_COLUMN && end_left_toe != StepParity::INVALID_COLUMN
+                ? layout.getYDifference(end_left_heel, end_left_toe)
+                : 0.0f;
+        const float right_facing =
+            end_right_heel != StepParity::INVALID_COLUMN && end_right_toe != StepParity::INVALID_COLUMN
+                ? layout.getYDifference(end_right_heel, end_right_toe)
+                : 0.0f;
+
+        const float heel_facing_penalty = static_cast<float>(std::pow(-1.0f * std::min(heel_facing, 0.0f), 1.8)) * 100.0f;
+        const float toes_facing_penalty = static_cast<float>(std::pow(-1.0f * std::min(toe_facing, 0.0f), 1.8)) * 100.0f;
+        const float left_facing_penalty = static_cast<float>(std::pow(-1.0f * std::min(left_facing, 0.0f), 1.8)) * 100.0f;
+        const float right_facing_penalty = static_cast<float>(std::pow(-1.0f * std::min(right_facing, 0.0f), 1.8)) * 100.0f;
+
+        if (heel_facing_penalty > 0.0f) cost += heel_facing_penalty * StepParity::FACING;
+        if (toes_facing_penalty > 0.0f) cost += toes_facing_penalty * StepParity::FACING;
+        if (left_facing_penalty > 0.0f) cost += left_facing_penalty * StepParity::FACING;
+        if (right_facing_penalty > 0.0f) cost += right_facing_penalty * StepParity::FACING;
+
+        return cost;
+    }
+
+    float calc_spin_costs(StepParity::State* initial_state, StepParity::State* result_state, int column_count) const {
+        float cost = 0.0f;
+
+        int end_left_heel = StepParity::INVALID_COLUMN;
+        int end_left_toe = StepParity::INVALID_COLUMN;
+        int end_right_heel = StepParity::INVALID_COLUMN;
+        int end_right_toe = StepParity::INVALID_COLUMN;
+
+        for (int i = 0; i < column_count; i++) {
+            switch (result_state->combinedColumns[i]) {
+                case StepParity::NONE:
+                    break;
+                case StepParity::LEFT_HEEL:
+                    end_left_heel = i;
+                    break;
+                case StepParity::LEFT_TOE:
+                    end_left_toe = i;
+                    break;
+                case StepParity::RIGHT_HEEL:
+                    end_right_heel = i;
+                    break;
+                case StepParity::RIGHT_TOE:
+                    end_right_toe = i;
+                default:
+                    break;
+            }
+        }
+
+        if (end_left_toe == StepParity::INVALID_COLUMN) end_left_toe = end_left_heel;
+        if (end_right_toe == StepParity::INVALID_COLUMN) end_right_toe = end_right_heel;
+
+        const StepParity::StagePoint previous_left_pos = layout.averagePoint(
+            initial_state->whereTheFeetAre[StepParity::LEFT_HEEL],
+            initial_state->whereTheFeetAre[StepParity::LEFT_TOE]);
+        const StepParity::StagePoint previous_right_pos = layout.averagePoint(
+            initial_state->whereTheFeetAre[StepParity::RIGHT_HEEL],
+            initial_state->whereTheFeetAre[StepParity::RIGHT_TOE]);
+        const StepParity::StagePoint left_pos = layout.averagePoint(end_left_heel, end_left_toe);
+        const StepParity::StagePoint right_pos = layout.averagePoint(end_right_heel, end_right_toe);
+
+        if (
+            right_pos.x < left_pos.x &&
+            previous_right_pos.x < previous_left_pos.x &&
+            right_pos.y < left_pos.y &&
+            previous_right_pos.y > previous_left_pos.y) {
+            cost += StepParity::SPIN;
+        }
+        if (
+            right_pos.x < left_pos.x &&
+            previous_right_pos.x < previous_left_pos.x &&
+            right_pos.y > left_pos.y &&
+            previous_right_pos.y < previous_left_pos.y) {
+            cost += StepParity::SPIN;
+        }
+        return cost;
+    }
+
+    float calc_footswitch_cost(
+        StepParity::State* initial_state,
+        StepParity::State* result_state,
+        const StepParity::Row& row,
+        float elapsed_time,
+        int column_count) const {
+        float cost = 0.0f;
+        if (elapsed_time >= StepParity::SLOW_FOOTSWITCH_THRESHOLD && elapsed_time < StepParity::SLOW_FOOTSWITCH_IGNORE) {
+            if (
+                std::all_of(row.mines.begin(), row.mines.end(), [](float mine) { return mine == 0.0f; }) &&
+                std::all_of(row.fakeMines.begin(), row.fakeMines.end(), [](float mine) { return mine == 0.0f; })) {
+                const float time_scaled = elapsed_time - StepParity::SLOW_FOOTSWITCH_THRESHOLD;
+
+                for (int i = 0; i < column_count; i++) {
+                    if (
+                        initial_state->combinedColumns[i] == StepParity::NONE ||
+                        result_state->columns[i] == StepParity::NONE) {
+                        continue;
+                    }
+                    if (
+                        initial_state->combinedColumns[i] != result_state->columns[i] &&
+                        initial_state->combinedColumns[i] != StepParity::OTHER_PART_OF_FOOT[result_state->columns[i]]) {
+                        cost += (time_scaled / (StepParity::SLOW_FOOTSWITCH_THRESHOLD + time_scaled)) * StepParity::FOOTSWITCH;
+                        break;
+                    }
+                }
+            }
+        }
+        return cost;
+    }
+
+    float calc_sideswitch_cost(StepParity::State* initial_state, StepParity::State* result_state, int column_count) const {
+        (void)column_count;
+        float cost = 0.0f;
+        for (int c : layout.sideArrows) {
+            if (
+                initial_state->combinedColumns[c] != result_state->columns[c] &&
+                result_state->columns[c] != StepParity::NONE &&
+                initial_state->combinedColumns[c] != StepParity::NONE &&
+                !result_state->didTheFootMove[initial_state->combinedColumns[c]]) {
+                cost += StepParity::SIDESWITCH;
+            }
+        }
+        return cost;
+    }
+
+    float calc_jack_cost(bool moved_left, bool moved_right, bool jacked_left, bool jacked_right, float elapsed_time, int column_count) const {
+        (void)column_count;
+        float cost = 0.0f;
+        if (elapsed_time < StepParity::JACK_THRESHOLD && moved_left != moved_right) {
+            const float time_scaled = StepParity::JACK_THRESHOLD - elapsed_time;
+            if (jacked_left || jacked_right) {
+                cost += (1.0f / time_scaled - 1.0f / StepParity::JACK_THRESHOLD) * StepParity::JACK;
+            }
+        }
+        return cost;
+    }
+
+    float calc_big_movements_quickly_cost(StepParity::State* initial_state, StepParity::State* result_state, float elapsed_time, int column_count) const {
+        (void)column_count;
+        float cost = 0.0f;
+        for (StepParity::Foot foot : result_state->movedFeet) {
+            if (foot == StepParity::NONE) {
+                continue;
+            }
+
+            const int initial_position = initial_state->whereTheFeetAre[foot];
+            if (initial_position == StepParity::INVALID_COLUMN) {
+                continue;
+            }
+
+            const int result_position = result_state->whatNoteTheFootIsHitting[foot];
+
+            const bool is_bracketing = result_state->whatNoteTheFootIsHitting[StepParity::OTHER_PART_OF_FOOT[foot]] != StepParity::INVALID_COLUMN;
+            if (is_bracketing && result_state->whatNoteTheFootIsHitting[StepParity::OTHER_PART_OF_FOOT[foot]] == initial_position) {
+                continue;
+            }
+
+            float dist = (std::sqrt(layout.getDistanceSq(initial_position, result_position)) * StepParity::DISTANCE) / elapsed_time;
+            if (is_bracketing) {
+                dist = dist * 0.2f;
+            }
+            cost += dist;
+        }
+        return cost;
+    }
+
+    bool did_double_step(
+        StepParity::State* initial_state,
+        StepParity::State* result_state,
+        std::vector<StepParity::Row>& rows,
+        int row_index,
+        bool moved_left,
+        bool jacked_left,
+        bool moved_right,
+        bool jacked_right,
+        int column_count) const {
+        (void)result_state;
+        (void)column_count;
+        StepParity::Row& row = rows[row_index];
+        bool doublestepped = false;
+        if (
+            moved_left &&
+            !jacked_left &&
+            ((initial_state->didTheFootMove[StepParity::LEFT_HEEL] &&
+              !initial_state->isTheFootHolding[StepParity::LEFT_HEEL]) ||
+             (initial_state->didTheFootMove[StepParity::LEFT_TOE] &&
+              !initial_state->isTheFootHolding[StepParity::LEFT_TOE]))) {
+            doublestepped = true;
+        }
+        if (
+            moved_right &&
+            !jacked_right &&
+            ((initial_state->didTheFootMove[StepParity::RIGHT_HEEL] &&
+              !initial_state->isTheFootHolding[StepParity::RIGHT_HEEL]) ||
+             (initial_state->didTheFootMove[StepParity::RIGHT_TOE] &&
+              !initial_state->isTheFootHolding[StepParity::RIGHT_TOE]))) {
+            doublestepped = true;
+        }
+
+        if (row_index - 1 > -1) {
+            StepParity::Row& last_row = rows[row_index - 1];
+            for (StepParity::IntermediateNoteData hold : last_row.holds) {
+                if (hold.type == TapNoteType_Empty) continue;
+                const float end_beat = row.beat;
+                const float start_beat = last_row.beat;
+                if (
+                    hold.beat + hold.hold_length > start_beat &&
+                    hold.beat + hold.hold_length < end_beat) {
+                    doublestepped = false;
+                }
+                if (hold.beat + hold.hold_length >= end_beat) doublestepped = false;
+            }
+        }
+        return doublestepped;
+    }
+
+    bool did_jack_left(
+        StepParity::State* initial_state,
+        StepParity::State* result_state,
+        int left_heel,
+        int left_toe,
+        bool moved_left,
+        bool did_jump,
+        int column_count) const {
+        (void)result_state;
+        (void)column_count;
+        bool jacked_left = false;
+        if (!did_jump && moved_left) {
+            if (left_heel > StepParity::INVALID_COLUMN &&
+                initial_state->combinedColumns[left_heel] == StepParity::LEFT_HEEL &&
+                !result_state->isTheFootHolding[StepParity::LEFT_HEEL] &&
+                ((initial_state->didTheFootMove[StepParity::LEFT_HEEL] &&
+                  !initial_state->isTheFootHolding[StepParity::LEFT_HEEL]) ||
+                 (initial_state->didTheFootMove[StepParity::LEFT_TOE] &&
+                  !initial_state->isTheFootHolding[StepParity::LEFT_TOE]))) {
+                jacked_left = true;
+            }
+            if (
+                left_toe > StepParity::INVALID_COLUMN &&
+                initial_state->combinedColumns[left_toe] == StepParity::LEFT_TOE &&
+                !result_state->isTheFootHolding[StepParity::LEFT_TOE] &&
+                ((initial_state->didTheFootMove[StepParity::LEFT_HEEL] &&
+                  !initial_state->isTheFootHolding[StepParity::LEFT_HEEL]) ||
+                 (initial_state->didTheFootMove[StepParity::LEFT_TOE] &&
+                  !initial_state->isTheFootHolding[StepParity::LEFT_TOE]))) {
+                jacked_left = true;
+            }
+        }
+        return jacked_left;
+    }
+
+    bool did_jack_right(
+        StepParity::State* initial_state,
+        StepParity::State* result_state,
+        int right_heel,
+        int right_toe,
+        bool moved_right,
+        bool did_jump,
+        int column_count) const {
+        (void)column_count;
+        bool jacked_right = false;
+        if (!did_jump && moved_right) {
+            if (right_heel > StepParity::INVALID_COLUMN &&
+                initial_state->combinedColumns[right_heel] == StepParity::RIGHT_HEEL &&
+                !result_state->isTheFootHolding[StepParity::RIGHT_HEEL] &&
+                ((initial_state->didTheFootMove[StepParity::RIGHT_HEEL] &&
+                  !initial_state->isTheFootHolding[StepParity::RIGHT_HEEL]) ||
+                 (initial_state->didTheFootMove[StepParity::RIGHT_TOE] &&
+                  !initial_state->isTheFootHolding[StepParity::RIGHT_TOE]))) {
+                jacked_right = true;
+            }
+            if (right_toe > StepParity::INVALID_COLUMN &&
+                initial_state->combinedColumns[right_toe] == StepParity::RIGHT_TOE &&
+                !result_state->isTheFootHolding[StepParity::RIGHT_TOE] &&
+                ((initial_state->didTheFootMove[StepParity::RIGHT_HEEL] &&
+                  !initial_state->isTheFootHolding[StepParity::RIGHT_HEEL]) ||
+                 (initial_state->didTheFootMove[StepParity::RIGHT_TOE] &&
+                  !initial_state->isTheFootHolding[StepParity::RIGHT_TOE]))) {
+                jacked_right = true;
+            }
+        }
+        return jacked_right;
+    }
+};
+} // namespace
+
+static StepParityTraceOut build_step_parity_trace(Steps* steps, TimingData* timing) {
+    StepParityTraceOut out;
+    out.status = "ok";
+    out.foot_labels = {"none", "left_heel", "left_toe", "right_heel", "right_toe"};
+    out.note_type_labels = {"empty", "tap", "hold_head", "hold_tail", "mine", "lift", "attack", "auto_keysound", "fake"};
+    out.cost_labels.reserve(StepParity::NUM_Cost);
+    for (int i = 0; i < StepParity::NUM_Cost; ++i) {
+        out.cost_labels.push_back(StepParity::COST_LABELS[i]);
+    }
+
+    if (!steps || StepParity::Layouts.find(steps->m_StepsType) == StepParity::Layouts.end()) {
+        out.status = "unsupported_steps_type";
+        return out;
+    }
+
+    StepParity::StageLayout layout = StepParity::Layouts.at(steps->m_StepsType);
+    out.layout.columns.reserve(layout.columns.size());
+    for (const auto& point : layout.columns) {
+        out.layout.columns.push_back({static_cast<double>(point.x), static_cast<double>(point.y)});
+    }
+    out.layout.up_arrows = layout.upArrows;
+    out.layout.down_arrows = layout.downArrows;
+    out.layout.side_arrows = layout.sideArrows;
+
+    NoteData note_data;
+    steps->GetNoteData(note_data);
+
+    if (!GAMESTATE) {
+        out.status = "no_gamestate";
+        return out;
+    }
+
+    TimingData* previous_timing = GAMESTATE->GetProcessedTimingData();
+    GAMESTATE->SetProcessedTimingData(timing);
+
+    StepParity::StepParityGenerator gen(layout);
+    const bool analyzed = gen.analyzeNoteData(note_data);
+
+    GAMESTATE->SetProcessedTimingData(previous_timing);
+
+    if (!analyzed) {
+        out.status = gen.rows.empty() ? "no_rows" : "invalid_graph";
+    }
+
+    std::vector<int> note_counts;
+    note_counts.reserve(gen.rows.size());
+    out.rows.reserve(gen.rows.size());
+    for (const auto& row : gen.rows) {
+        StepParityRowOut row_out;
+        row_out.row_index = row.rowIndex;
+        row_out.beat = static_cast<double>(row.beat);
+        row_out.second = static_cast<double>(row.second);
+        row_out.note_types.reserve(row.notes.size());
+        row_out.hold_types.reserve(row.holds.size());
+        row_out.columns.reserve(row.columns.size());
+        row_out.mines.reserve(row.mines.size());
+        row_out.fake_mines.reserve(row.fakeMines.size());
+
+        int note_count = 0;
+        for (const auto& note : row.notes) {
+            row_out.note_types.push_back(static_cast<int>(note.type));
+            if (note.type != TapNoteType_Empty) {
+                ++note_count;
+            }
+        }
+        row_out.note_count = note_count;
+        note_counts.push_back(note_count);
+
+        for (const auto& hold : row.holds) {
+            row_out.hold_types.push_back(static_cast<int>(hold.type));
+        }
+        for (auto foot : row.columns) {
+            row_out.columns.push_back(static_cast<int>(foot));
+        }
+        row_out.where_feet = row.whereTheFeetAre;
+        row_out.hold_tails.assign(row.holdTails.begin(), row.holdTails.end());
+        for (float v : row.mines) {
+            row_out.mines.push_back(static_cast<double>(v));
+        }
+        for (float v : row.fakeMines) {
+            row_out.fake_mines.push_back(static_cast<double>(v));
+        }
+        out.rows.push_back(std::move(row_out));
+    }
+
+    if (gen.rows.size() >= 2) {
+        out.tech_rows.reserve(gen.rows.size() - 1);
+    }
+    for (size_t i = 1; i < gen.rows.size(); ++i) {
+        const StepParity::Row& current_row = gen.rows[i];
+        const StepParity::Row& previous_row = gen.rows[i - 1];
+        const float elapsed_time = current_row.second - previous_row.second;
+
+        StepParityTechRowOut tech_out;
+        tech_out.row_index = current_row.rowIndex;
+        tech_out.elapsed = static_cast<double>(elapsed_time);
+
+        if (note_counts[i] == 1 && note_counts[i - 1] == 1) {
+            for (StepParity::Foot foot : StepParity::FEET) {
+                if (current_row.whereTheFeetAre[foot] == StepParity::INVALID_COLUMN
+                    || previous_row.whereTheFeetAre[foot] == StepParity::INVALID_COLUMN) {
+                    continue;
+                }
+                if (previous_row.whereTheFeetAre[foot] == current_row.whereTheFeetAre[foot]) {
+                    if (elapsed_time < kJackCutoffSeconds) {
+                        tech_out.jacks += 1;
+                    }
+                } else {
+                    if (elapsed_time < kDoublestepCutoffSeconds) {
+                        tech_out.doublesteps += 1;
+                    }
+                }
+            }
+        }
+
+        if (note_counts[i] >= 2) {
+            if (current_row.whereTheFeetAre[StepParity::LEFT_HEEL] != StepParity::INVALID_COLUMN
+                && current_row.whereTheFeetAre[StepParity::LEFT_TOE] != StepParity::INVALID_COLUMN) {
+                tech_out.brackets += 1;
+            }
+            if (current_row.whereTheFeetAre[StepParity::RIGHT_HEEL] != StepParity::INVALID_COLUMN
+                && current_row.whereTheFeetAre[StepParity::RIGHT_TOE] != StepParity::INVALID_COLUMN) {
+                tech_out.brackets += 1;
+            }
+        }
+
+        for (int c : layout.upArrows) {
+            if (is_footswitch(c, current_row, previous_row, elapsed_time)) {
+                tech_out.up_footswitches += 1;
+                tech_out.footswitches += 1;
+            }
+        }
+        for (int c : layout.downArrows) {
+            if (is_footswitch(c, current_row, previous_row, elapsed_time)) {
+                tech_out.down_footswitches += 1;
+                tech_out.footswitches += 1;
+            }
+        }
+        for (int c : layout.sideArrows) {
+            if (is_footswitch(c, current_row, previous_row, elapsed_time)) {
+                tech_out.sideswitches += 1;
+            }
+        }
+
+        const int left_heel = current_row.whereTheFeetAre[StepParity::LEFT_HEEL];
+        const int left_toe = current_row.whereTheFeetAre[StepParity::LEFT_TOE];
+        const int right_heel = current_row.whereTheFeetAre[StepParity::RIGHT_HEEL];
+        const int right_toe = current_row.whereTheFeetAre[StepParity::RIGHT_TOE];
+
+        const int previous_left_heel = previous_row.whereTheFeetAre[StepParity::LEFT_HEEL];
+        const int previous_left_toe = previous_row.whereTheFeetAre[StepParity::LEFT_TOE];
+        const int previous_right_heel = previous_row.whereTheFeetAre[StepParity::RIGHT_HEEL];
+        const int previous_right_toe = previous_row.whereTheFeetAre[StepParity::RIGHT_TOE];
+
+        if (right_heel != StepParity::INVALID_COLUMN
+            && previous_left_heel != StepParity::INVALID_COLUMN
+            && previous_right_heel == StepParity::INVALID_COLUMN) {
+            StepParity::StagePoint left_pos = layout.averagePoint(previous_left_heel, previous_left_toe);
+            StepParity::StagePoint right_pos = layout.averagePoint(right_heel, right_toe);
+
+            if (right_pos.x < left_pos.x) {
+                if (i > 1) {
+                    const StepParity::Row& previous_previous_row = gen.rows[i - 2];
+                    const int previous_previous_right_heel = previous_previous_row.whereTheFeetAre[StepParity::RIGHT_HEEL];
+                    if (previous_previous_right_heel != StepParity::INVALID_COLUMN
+                        && previous_previous_right_heel != right_heel) {
+                        StepParity::StagePoint previous_previous_right_pos = layout.columns[previous_previous_right_heel];
+                        if (previous_previous_right_pos.x > left_pos.x) {
+                            tech_out.full_crossovers += 1;
+                        } else {
+                            tech_out.half_crossovers += 1;
+                        }
+                        tech_out.crossovers += 1;
+                    }
+                } else {
+                    tech_out.half_crossovers += 1;
+                    tech_out.crossovers += 1;
+                }
+            }
+        } else if (left_heel != StepParity::INVALID_COLUMN
+            && previous_right_heel != StepParity::INVALID_COLUMN
+            && previous_left_heel == StepParity::INVALID_COLUMN) {
+            StepParity::StagePoint left_pos = layout.averagePoint(left_heel, left_toe);
+            StepParity::StagePoint right_pos = layout.averagePoint(previous_right_heel, previous_right_toe);
+
+            if (right_pos.x < left_pos.x) {
+                if (i > 1) {
+                    const StepParity::Row& previous_previous_row = gen.rows[i - 2];
+                    const int previous_previous_left_heel = previous_previous_row.whereTheFeetAre[StepParity::LEFT_HEEL];
+                    if (previous_previous_left_heel != StepParity::INVALID_COLUMN
+                        && previous_previous_left_heel != left_heel) {
+                        StepParity::StagePoint previous_previous_left_pos = layout.columns[previous_previous_left_heel];
+                        if (right_pos.x > previous_previous_left_pos.x) {
+                            tech_out.full_crossovers += 1;
+                        } else {
+                            tech_out.half_crossovers += 1;
+                        }
+                        tech_out.crossovers += 1;
+                    }
+                } else {
+                    tech_out.half_crossovers += 1;
+                    tech_out.crossovers += 1;
+                }
+            }
+        }
+
+        out.tech_rows.push_back(std::move(tech_out));
+    }
+
+    if (gen.nodes_for_rows.size() == gen.rows.size()) {
+        StepParityCostTraceCalculator cost(layout);
+        StepParity::State initial_state(layout.columnCount);
+        std::vector<float> cost_breakdown;
+        out.cost_rows.reserve(gen.rows.size());
+
+        for (size_t i = 0; i < gen.rows.size(); ++i) {
+            const int node_index = gen.nodes_for_rows[i];
+            if (node_index < 0 || static_cast<size_t>(node_index) >= gen.nodes.size()) {
+                continue;
+            }
+
+            StepParity::StepParityNode* current_node = gen.nodes[node_index];
+            StepParity::State* initial_state_ptr = &initial_state;
+            float elapsed = 1.0f;
+            if (i > 0) {
+                const int previous_index = gen.nodes_for_rows[i - 1];
+                if (previous_index < 0 || static_cast<size_t>(previous_index) >= gen.nodes.size()) {
+                    continue;
+                }
+                StepParity::StepParityNode* previous_node = gen.nodes[previous_index];
+                initial_state_ptr = previous_node->state;
+                elapsed = current_node->second - previous_node->second;
+            }
+
+            StepParityCostRowOut cost_row;
+            cost_row.row_index = gen.rows[i].rowIndex;
+            cost_row.elapsed = static_cast<double>(elapsed);
+            const float total = cost.get_action_cost_breakdown(
+                initial_state_ptr, current_node->state, gen.rows, static_cast<int>(i), elapsed, cost_breakdown);
+            cost_row.total = static_cast<double>(total);
+            cost_row.costs.reserve(cost_breakdown.size());
+            for (float v : cost_breakdown) {
+                cost_row.costs.push_back(static_cast<double>(v));
+            }
+            out.cost_rows.push_back(std::move(cost_row));
+        }
+    }
+
+    return out;
+}
+
 static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Steps* steps, const Song& song) {
     TimingData* const td = steps->GetTimingData();
     td->TidyUpData(false);
@@ -973,6 +1884,9 @@ static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Ste
         out.quads = radar_counts.quads;
 
         fill_tech_counts(out, tech);
+    }
+    if (g_enable_step_parity_trace) {
+        out.step_parity_trace = build_step_parity_trace(steps, td);
     }
     fill_timing_tables(out, td);
     return out;
@@ -1079,4 +1993,6 @@ std::vector<ChartMetrics> parse_all_charts_with_itgmania(
     (void)description;
     return {};
 }
+
+void set_step_parity_trace_enabled(bool) {}
 #endif
