@@ -1,5 +1,6 @@
 #pragma once
 
+#include <iosfwd>
 #include <optional>
 #include <string>
 #include <vector>
@@ -94,3 +95,12 @@ std::vector<ChartMetrics> parse_all_charts_with_itgmania(
     const std::string& description);
 
 void init_itgmania_runtime(int argc, char** argv);
+
+bool emit_step_parity_dump(
+    std::ostream& out,
+    const std::string& simfile_path,
+    const std::string& steps_type,
+    const std::string& difficulty,
+    const std::string& description,
+    bool dump_rows,
+    bool dump_notes);

@@ -6,7 +6,7 @@
 
 #include "itgmania_adapter.h"
 
-static constexpr std::string_view kVersion = "0.1.3";
+static constexpr std::string_view kVersion = "0.1.4";
 
 static std::string json_escape(std::string_view s) {
     std::string out;
@@ -65,10 +65,13 @@ static void print_usage() {
         << "Options:\n"
         << "  --version, -v Print the version and exit\n"
         << "  --hash, -h   Print a hash list (one line per chart), no JSON\n"
+        << "  --omit-tech  Omit tech_counts from JSON output\n"
+        << "  --dump-rows  Emit step parity row dumps to stderr\n"
+        << "  --dump-notes Emit step parity note dumps to stderr\n"
         << "  --help       Show this help\n";
 }
 
-static void emit_json_stub_timing(std::ostream& out) {
+static void emit_json_stub_timing(std::ostream& out, bool trailing_comma) {
     out << "  \"timing\": {\n";
     out << "    \"beat0_offset_seconds\": null,\n";
     out << "    \"beat0_group_offset_seconds\": null,\n";
@@ -83,7 +86,12 @@ static void emit_json_stub_timing(std::ostream& out) {
     out << "    \"speeds\": [],\n";
     out << "    \"scrolls\": [],\n";
     out << "    \"fakes\": []\n";
-    out << "  },\n";
+    out << "  }";
+    if (trailing_comma) {
+        out << ",\n";
+    } else {
+        out << "\n";
+    }
 }
 
 static void emit_json_stub_tech_counts(std::ostream& out) {
@@ -101,7 +109,8 @@ static void emit_json_stub(
     std::ostream& out,
     const std::string& simfile,
     const std::string& steps_type,
-    const std::string& difficulty) {
+    const std::string& difficulty,
+    bool include_tech_counts) {
     out << "{\n";
     out << "  \"status\": \"stub\",\n";
     out << "  \"simfile\": \"" << json_escape(simfile) << "\",\n";
@@ -144,8 +153,10 @@ static void emit_json_stub(
     out << "  \"jumps\": null,\n";
     out << "  \"hands\": null,\n";
     out << "  \"quads\": null,\n";
-    emit_json_stub_timing(out);
-    emit_json_stub_tech_counts(out);
+    emit_json_stub_timing(out, include_tech_counts);
+    if (include_tech_counts) {
+        emit_json_stub_tech_counts(out);
+    }
     out << "}\n";
 }
 
@@ -211,7 +222,11 @@ static void emit_chart_json_measure_data(std::ostream& out, const ChartMetrics& 
     out << ind2 << "\"quads\": " << m.quads << ",\n";
 }
 
-static void emit_chart_json_timing(std::ostream& out, const ChartMetrics& m, const std::string& ind2) {
+static void emit_chart_json_timing(
+    std::ostream& out,
+    const ChartMetrics& m,
+    const std::string& ind2,
+    bool trailing_comma) {
     out << ind2 << "\"timing\": {\n";
     out << ind2 << "  \"beat0_offset_seconds\": " << m.beat0_offset_seconds << ",\n";
     out << ind2 << "  \"beat0_group_offset_seconds\": " << m.beat0_group_offset_seconds << ",\n";
@@ -248,7 +263,12 @@ static void emit_chart_json_timing(std::ostream& out, const ChartMetrics& m, con
     out << ind2 << "  \"fakes\": ";
     emit_number_table(out, m.timing_fakes);
     out << "\n";
-    out << ind2 << "},\n";
+    out << ind2 << "}";
+    if (trailing_comma) {
+        out << ",\n";
+    } else {
+        out << "\n";
+    }
 }
 
 static void emit_chart_json_tech_counts(std::ostream& out, const ChartMetrics& m, const std::string& indent, const std::string& ind2) {
@@ -263,24 +283,35 @@ static void emit_chart_json_tech_counts(std::ostream& out, const ChartMetrics& m
     out << indent << "}";
 }
 
-static void emit_chart_json(std::ostream& out, const ChartMetrics& m, const std::string& indent) {
+static void emit_chart_json(
+    std::ostream& out,
+    const ChartMetrics& m,
+    const std::string& indent,
+    bool include_tech_counts) {
     const std::string ind2 = indent + "  ";
     out << indent << "{\n";
     emit_chart_json_header(out, m, ind2);
     emit_chart_json_measure_data(out, m, ind2);
-    emit_chart_json_timing(out, m, ind2);
-    emit_chart_json_tech_counts(out, m, indent, ind2);
+    emit_chart_json_timing(out, m, ind2, include_tech_counts);
+    if (include_tech_counts) {
+        emit_chart_json_tech_counts(out, m, indent, ind2);
+    } else {
+        out << indent << "}";
+    }
 }
 
-static void emit_json(std::ostream& out, const ChartMetrics& m) {
-    emit_chart_json(out, m, "");
+static void emit_json(std::ostream& out, const ChartMetrics& m, bool include_tech_counts) {
+    emit_chart_json(out, m, "", include_tech_counts);
     out << "\n";
 }
 
-static void emit_json_array(std::ostream& out, const std::vector<ChartMetrics>& charts) {
+static void emit_json_array(
+    std::ostream& out,
+    const std::vector<ChartMetrics>& charts,
+    bool include_tech_counts) {
     out << "[\n";
     for (size_t i = 0; i < charts.size(); ++i) {
-        emit_chart_json(out, charts[i], "  ");
+        emit_chart_json(out, charts[i], "  ", include_tech_counts);
         if (i + 1 < charts.size()) out << ",";
         out << "\n";
     }
@@ -291,6 +322,9 @@ struct CliOpts {
     bool hash_mode = false;
     bool help = false;
     bool version = false;
+    bool omit_tech = false;
+    bool dump_rows = false;
+    bool dump_notes = false;
     std::vector<std::string> positional;
 };
 
@@ -305,6 +339,18 @@ static CliOpts parse_args(int argc, char** argv) {
         }
         if (a == "--version" || a == "-v") {
             o.version = true;
+            continue;
+        }
+        if (a == "--omit-tech") {
+            o.omit_tech = true;
+            continue;
+        }
+        if (a == "--dump-rows") {
+            o.dump_rows = true;
+            continue;
+        }
+        if (a == "--dump-notes") {
+            o.dump_notes = true;
             continue;
         }
         if (a == "--help") {
@@ -366,17 +412,45 @@ int main(int argc, char** argv) {
     const std::string steps_type = (opts.positional.size() >= 2) ? opts.positional[1] : "";
     const std::string difficulty = (opts.positional.size() >= 3) ? opts.positional[2] : "";
     const std::string description = (opts.positional.size() >= 4) ? opts.positional[3] : "";
+    const bool include_tech_counts = !opts.omit_tech;
+    const bool wants_dump = opts.dump_rows || opts.dump_notes;
 
     if (opts.hash_mode) {
+        if (wants_dump) {
+            std::cerr << "--dump-rows/--dump-notes are not available with --hash\n";
+            return 1;
+        }
         return run_hash_mode(simfile);
     }
 
     init_itgmania_runtime(argc, argv);
 
+    if (wants_dump) {
+        if (steps_type.empty() || difficulty.empty()) {
+            std::cerr << "--dump-rows/--dump-notes require steps-type and difficulty\n";
+            return 1;
+        }
+        if (difficulty == "edit" && description.empty()) {
+            std::cerr << "--dump-rows/--dump-notes require description for edit charts\n";
+            return 1;
+        }
+        if (!emit_step_parity_dump(
+                std::cerr,
+                simfile,
+                steps_type,
+                difficulty,
+                description,
+                opts.dump_rows,
+                opts.dump_notes)) {
+            std::cerr << "Failed to emit step parity dump\n";
+            return 1;
+        }
+    }
+
     if (steps_type.empty() && difficulty.empty()) {
         auto charts = parse_all_charts_with_itgmania(simfile, "", "", "");
         if (!charts.empty()) {
-            emit_json_array(std::cout, charts);
+            emit_json_array(std::cout, charts, include_tech_counts);
             return 0;
         }
     }
@@ -386,15 +460,15 @@ int main(int argc, char** argv) {
     if (!steps_type.empty() && difficulty == "edit" && description.empty()) {
         auto charts = parse_all_charts_with_itgmania(simfile, steps_type, difficulty, "");
         if (!charts.empty()) {
-            emit_json_array(std::cout, charts);
+            emit_json_array(std::cout, charts, include_tech_counts);
             return 0;
         }
     }
 
     if (auto parsed = parse_chart_with_itgmania(simfile, steps_type, difficulty, description)) {
-        emit_json(std::cout, *parsed);
+        emit_json(std::cout, *parsed, include_tech_counts);
     } else {
-        emit_json_stub(std::cout, simfile, steps_type, difficulty);
+        emit_json_stub(std::cout, simfile, steps_type, difficulty, include_tech_counts);
     }
 
     return 0;
