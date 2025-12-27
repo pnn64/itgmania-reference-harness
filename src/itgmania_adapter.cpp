@@ -56,6 +56,7 @@ extern "C" {
 #include "Song.h"
 #include "Steps.h"
 #include "Style.h"
+#include "StepParityGenerator.h"
 #include "TechCounts.h"
 #include "ThemeManager.h"
 #include "TimingData.h"
@@ -1049,6 +1050,80 @@ static const char* to_string(DumpTapNoteSubType value) {
     return "Invalid";
 }
 
+static const char* foot_label(StepParity::Foot foot) {
+    switch (foot) {
+        case StepParity::NONE: return "N";
+        case StepParity::LEFT_HEEL: return "LH";
+        case StepParity::LEFT_TOE: return "LT";
+        case StepParity::RIGHT_HEEL: return "RH";
+        case StepParity::RIGHT_TOE: return "RT";
+        default: return "N";
+    }
+}
+
+static std::string format_foot_vec(const StepParity::FootPlacement& feet) {
+    std::ostringstream out;
+    out << "[";
+    for (size_t i = 0; i < feet.size(); ++i) {
+        if (i) {
+            out << ",";
+        }
+        out << foot_label(feet[i]);
+    }
+    out << "]";
+    return out.str();
+}
+
+static int foot_position(const std::vector<int>& positions, StepParity::Foot foot) {
+    const size_t idx = static_cast<size_t>(foot);
+    if (idx >= positions.size()) {
+        return StepParity::INVALID_COLUMN;
+    }
+    return positions[idx];
+}
+
+static int foot_position(const int* positions, size_t size, StepParity::Foot foot) {
+    const size_t idx = static_cast<size_t>(foot);
+    if (idx >= size) {
+        return StepParity::INVALID_COLUMN;
+    }
+    return positions[idx];
+}
+
+static std::string format_foot_positions(const std::vector<int>& positions) {
+    std::ostringstream out;
+    out << "lh=" << foot_position(positions, StepParity::LEFT_HEEL)
+        << " lt=" << foot_position(positions, StepParity::LEFT_TOE)
+        << " rh=" << foot_position(positions, StepParity::RIGHT_HEEL)
+        << " rt=" << foot_position(positions, StepParity::RIGHT_TOE);
+    return out.str();
+}
+
+static std::string format_foot_positions(const int* positions, size_t size) {
+    std::ostringstream out;
+    out << "lh=" << foot_position(positions, size, StepParity::LEFT_HEEL)
+        << " lt=" << foot_position(positions, size, StepParity::LEFT_TOE)
+        << " rh=" << foot_position(positions, size, StepParity::RIGHT_HEEL)
+        << " rt=" << foot_position(positions, size, StepParity::RIGHT_TOE);
+    return out.str();
+}
+
+static std::string format_foot_flags(const bool* flags, size_t size) {
+    auto flag_value = [&](StepParity::Foot foot) -> int {
+        const size_t idx = static_cast<size_t>(foot);
+        if (idx >= size) {
+            return 0;
+        }
+        return flags[idx] ? 1 : 0;
+    };
+    std::ostringstream out;
+    out << "lh=" << flag_value(StepParity::LEFT_HEEL)
+        << " lt=" << flag_value(StepParity::LEFT_TOE)
+        << " rh=" << flag_value(StepParity::RIGHT_HEEL)
+        << " rt=" << flag_value(StepParity::RIGHT_TOE);
+    return out.str();
+}
+
 struct IdentityHasher {
     uint64_t value = 0;
 
@@ -1352,6 +1427,100 @@ static size_t build_intermediate_notes_with_timing(
 
     return note_count;
 }
+
+static bool emit_step_parity_path_dump(Steps* steps, std::ostream& out) {
+    if (!steps) {
+        out << "STEP_PARITY_PATH error=missing_steps\n";
+        return false;
+    }
+    if (StepParity::Layouts.find(steps->m_StepsType) == StepParity::Layouts.end()) {
+        out << "STEP_PARITY_PATH error=unsupported_steps_type\n";
+        return false;
+    }
+
+    TimingData* timing = steps->GetTimingData();
+    GAMESTATE->SetProcessedTimingData(timing);
+
+    NoteData note_data;
+    steps->GetNoteData(note_data);
+
+    StepParity::StageLayout layout = StepParity::Layouts.at(steps->m_StepsType);
+    StepParity::StepParityGenerator gen(layout);
+    if (!gen.analyzeNoteData(note_data)) {
+        GAMESTATE->SetProcessedTimingData(nullptr);
+        out << "STEP_PARITY_PATH error=analyze_failed\n";
+        return false;
+    }
+
+    const size_t node_count = gen.nodes.size();
+    const int end_id = node_count ? gen.nodes.back()->id : -1;
+    out << "STEP_PARITY_PATH start rows=" << gen.rows.size()
+        << " nodes=" << node_count
+        << " start=0 end=" << end_id
+        << "\n";
+
+    float total_cost = 0.0f;
+    std::ios_base::fmtflags flags = out.flags();
+    std::streamsize precision = out.precision();
+    out << std::fixed << std::setprecision(6);
+
+    for (size_t i = 0; i < gen.nodes_for_rows.size(); ++i) {
+        const int node_id = gen.nodes_for_rows[i];
+        const int prev_id = (i == 0) ? 0 : gen.nodes_for_rows[i - 1];
+        StepParity::StepParityNode* prev_node = gen.nodes[prev_id];
+        StepParity::StepParityNode* curr_node = gen.nodes[node_id];
+
+        float edge_cost = -1.0f;
+        auto it = prev_node->neighbors.find(curr_node);
+        if (it != prev_node->neighbors.end()) {
+            edge_cost = it->second;
+        }
+        total_cost += edge_cost;
+
+        const StepParity::Row& row = gen.rows[i];
+        const StepParity::State* state = curr_node->state;
+        out << "STEP_PARITY_PATH row_idx=" << i
+            << " node=" << node_id
+            << " prev=" << prev_id
+            << " edge_cost=" << edge_cost
+            << " total_cost=" << total_cost
+            << " beat=" << row.beat
+            << " second=" << row.second
+            << " note_count=" << row.noteCount
+            << " columns=" << format_foot_vec(state->columns)
+            << " combined=" << format_foot_vec(state->combinedColumns)
+            << " moved=" << format_foot_vec(state->movedFeet)
+            << " hold=" << format_foot_vec(state->holdFeet)
+            << " row_feet=" << format_foot_positions(row.whereTheFeetAre)
+            << " state_feet=" << format_foot_positions(state->whereTheFeetAre, StepParity::NUM_Foot)
+            << " moved_flags=" << format_foot_flags(state->didTheFootMove, StepParity::NUM_Foot)
+            << " hold_flags=" << format_foot_flags(state->isTheFootHolding, StepParity::NUM_Foot)
+            << "\n";
+    }
+
+    const int last_id = gen.nodes_for_rows.empty() ? 0 : gen.nodes_for_rows.back();
+    float end_cost = -1.0f;
+    if (node_count && !gen.nodes_for_rows.empty()) {
+        StepParity::StepParityNode* last_node = gen.nodes[last_id];
+        StepParity::StepParityNode* end_node = gen.nodes.back();
+        auto it = last_node->neighbors.find(end_node);
+        if (it != last_node->neighbors.end()) {
+            end_cost = it->second;
+        }
+    }
+    total_cost += end_cost;
+    out << "STEP_PARITY_PATH end last_node=" << last_id
+        << " end_node=" << end_id
+        << " edge_cost=" << end_cost
+        << " total_cost=" << total_cost
+        << "\n";
+
+    out.flags(flags);
+    out.precision(precision);
+
+    GAMESTATE->SetProcessedTimingData(nullptr);
+    return true;
+}
 } // namespace
 
 bool emit_step_parity_dump(
@@ -1361,8 +1530,9 @@ bool emit_step_parity_dump(
     const std::string& difficulty_req,
     const std::string& description_req,
     bool dump_rows,
-    bool dump_notes) {
-    if (!dump_rows && !dump_notes) {
+    bool dump_notes,
+    bool dump_path) {
+    if (!dump_rows && !dump_notes && !dump_path) {
         return true;
     }
 
@@ -1414,9 +1584,17 @@ bool emit_step_parity_dump(
         column_count = GAMEMAN->GetStepsTypeInfo(steps->m_StepsType).iNumTracks;
     }
 
-    const std::vector<ParsedRow> rows =
-        parse_chart_rows_with_timing(note_data, timing, column_count, dump_rows, out);
-    build_intermediate_notes_with_timing(rows, timing, column_count, dump_notes, out);
+    if (dump_rows || dump_notes) {
+        const std::vector<ParsedRow> rows =
+            parse_chart_rows_with_timing(note_data, timing, column_count, dump_rows, out);
+        build_intermediate_notes_with_timing(rows, timing, column_count, dump_notes, out);
+    }
+
+    if (dump_path) {
+        if (!emit_step_parity_path_dump(steps, out)) {
+            return false;
+        }
+    }
     return true;
 }
 
@@ -1509,7 +1687,8 @@ bool emit_step_parity_dump(
     const std::string& difficulty,
     const std::string& description,
     bool dump_rows,
-    bool dump_notes) {
+    bool dump_notes,
+    bool dump_path) {
     (void)out;
     (void)simfile_path;
     (void)steps_type;
@@ -1517,6 +1696,7 @@ bool emit_step_parity_dump(
     (void)description;
     (void)dump_rows;
     (void)dump_notes;
+    (void)dump_path;
     return false;
 }
 #endif

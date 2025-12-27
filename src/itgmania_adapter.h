@@ -103,4 +103,5 @@ bool emit_step_parity_dump(
     const std::string& difficulty,
     const std::string& description,
     bool dump_rows,
-    bool dump_notes);
+    bool dump_notes,
+    bool dump_path);

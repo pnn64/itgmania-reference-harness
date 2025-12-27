@@ -6,7 +6,7 @@
 
 #include "itgmania_adapter.h"
 
-static constexpr std::string_view kVersion = "0.1.4";
+static constexpr std::string_view kVersion = "0.1.5";
 
 static std::string json_escape(std::string_view s) {
     std::string out;
@@ -68,6 +68,7 @@ static void print_usage() {
         << "  --omit-tech  Omit tech_counts from JSON output\n"
         << "  --dump-rows  Emit step parity row dumps to stderr\n"
         << "  --dump-notes Emit step parity note dumps to stderr\n"
+        << "  --dump-path  Emit step parity path dumps to stderr\n"
         << "  --help       Show this help\n";
 }
 
@@ -325,6 +326,7 @@ struct CliOpts {
     bool omit_tech = false;
     bool dump_rows = false;
     bool dump_notes = false;
+    bool dump_path = false;
     std::vector<std::string> positional;
 };
 
@@ -351,6 +353,10 @@ static CliOpts parse_args(int argc, char** argv) {
         }
         if (a == "--dump-notes") {
             o.dump_notes = true;
+            continue;
+        }
+        if (a == "--dump-path") {
+            o.dump_path = true;
             continue;
         }
         if (a == "--help") {
@@ -413,11 +419,11 @@ int main(int argc, char** argv) {
     const std::string difficulty = (opts.positional.size() >= 3) ? opts.positional[2] : "";
     const std::string description = (opts.positional.size() >= 4) ? opts.positional[3] : "";
     const bool include_tech_counts = !opts.omit_tech;
-    const bool wants_dump = opts.dump_rows || opts.dump_notes;
+    const bool wants_dump = opts.dump_rows || opts.dump_notes || opts.dump_path;
 
     if (opts.hash_mode) {
         if (wants_dump) {
-            std::cerr << "--dump-rows/--dump-notes are not available with --hash\n";
+            std::cerr << "--dump-rows/--dump-notes/--dump-path are not available with --hash\n";
             return 1;
         }
         return run_hash_mode(simfile);
@@ -427,11 +433,11 @@ int main(int argc, char** argv) {
 
     if (wants_dump) {
         if (steps_type.empty() || difficulty.empty()) {
-            std::cerr << "--dump-rows/--dump-notes require steps-type and difficulty\n";
+            std::cerr << "--dump-rows/--dump-notes/--dump-path require steps-type and difficulty\n";
             return 1;
         }
         if (difficulty == "edit" && description.empty()) {
-            std::cerr << "--dump-rows/--dump-notes require description for edit charts\n";
+            std::cerr << "--dump-rows/--dump-notes/--dump-path require description for edit charts\n";
             return 1;
         }
         if (!emit_step_parity_dump(
@@ -441,7 +447,8 @@ int main(int argc, char** argv) {
                 difficulty,
                 description,
                 opts.dump_rows,
-                opts.dump_notes)) {
+                opts.dump_notes,
+                opts.dump_path)) {
             std::cerr << "Failed to emit step parity dump\n";
             return 1;
         }
