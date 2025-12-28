@@ -40,6 +40,7 @@ extern "C" {
 #include "JsonUtil.h"
 #include "LocalizedString.h"
 #include "LuaManager.h"
+#include "MsdFile.h"
 #include "MessageManager.h"
 #include "NoteData.h"
 #include "NoteDataUtil.h"
@@ -290,6 +291,152 @@ static bool load_song(const std::string& simfile_path, Song& song) {
     return false;
 }
 
+static std::string raw_bpms_from_msd(const std::string& simfile_path,
+                                     const std::string& steps_type,
+                                     const std::string& difficulty,
+                                     const std::string& description) {
+    MsdFile msd;
+    if (!msd.ReadFile(simfile_path, true)) {
+        return {};
+    }
+
+    RString ext = GetExtension(simfile_path);
+    ext.MakeLower();
+
+    auto normalize_steps = [&](const RString& value) -> std::string {
+        RString out = value;
+        Trim(out);
+        return normalize_steps_type_string(out.c_str());
+    };
+    auto normalize_diff = [&](const RString& value) -> std::string {
+        RString out = value;
+        Trim(out);
+        return to_lower(out.c_str());
+    };
+    auto normalize_desc = [&](const RString& value) -> std::string {
+        RString out = value;
+        Trim(out);
+        return out.c_str();
+    };
+
+    if (ext != "ssc" && ext != "ats") {
+        const unsigned values = msd.GetNumValues();
+        for (unsigned i = 0; i < values; ++i) {
+            const MsdFile::value_t& params = msd.GetValue(i);
+            RString tag = params[0];
+            tag.MakeUpper();
+            if (tag == "BPMS") {
+                return params[1];
+            }
+        }
+        return {};
+    }
+
+    RString top_bpms;
+    bool in_steps = false;
+    RString step_type_raw;
+    RString diff_raw;
+    RString desc_raw;
+    RString chart_bpms;
+
+    const unsigned values = msd.GetNumValues();
+    for (unsigned i = 0; i < values; ++i) {
+        const MsdFile::value_t& params = msd.GetValue(i);
+        RString tag = params[0];
+        tag.MakeUpper();
+
+        if (!in_steps) {
+            if (tag == "BPMS") {
+                top_bpms = params[1];
+            } else if (tag == "NOTEDATA") {
+                in_steps = true;
+                step_type_raw = "";
+                diff_raw = "";
+                desc_raw = "";
+                chart_bpms = "";
+            }
+            continue;
+        }
+
+        if (tag == "STEPSTYPE") {
+            step_type_raw = params[1];
+        } else if (tag == "DIFFICULTY") {
+            diff_raw = params[1];
+        } else if (tag == "DESCRIPTION") {
+            desc_raw = params[1];
+        } else if (tag == "BPMS") {
+            chart_bpms = params[1];
+        } else if (tag == "NOTES" || tag == "NOTES2" || tag == "STEPFILENAME") {
+            const std::string step_type_norm = normalize_steps(step_type_raw);
+            const std::string diff_norm = normalize_diff(diff_raw);
+            const std::string desc_norm = normalize_desc(desc_raw);
+
+            bool match = (steps_type.empty() || step_type_norm == steps_type) &&
+                (difficulty.empty() || diff_norm == difficulty);
+            if (match && diff_norm == "edit" && !description.empty()) {
+                match = desc_norm == description;
+            }
+
+            if (match) {
+                if (!chart_bpms.empty()) return chart_bpms;
+                if (!top_bpms.empty()) return top_bpms;
+                return {};
+            }
+            in_steps = false;
+        }
+    }
+
+    if (!top_bpms.empty()) return top_bpms;
+    return {};
+}
+
+struct FallbackBpmOverride {
+    std::string bpms;
+};
+
+static int lua_normalize_float_digits_override(lua_State* L) {
+    auto* ov = static_cast<FallbackBpmOverride*>(lua_touserdata(L, lua_upvalueindex(1)));
+    if (!ov) {
+        lua_pushstring(L, "");
+        return 1;
+    }
+    lua_pushlstring(L, ov->bpms.data(), ov->bpms.size());
+    return 1;
+}
+
+static bool install_normalize_bpms_override(lua_State* L, FallbackBpmOverride* ov) {
+    lua_getglobal(L, "ParseChartInfo");
+    if (!lua_isfunction(L, -1)) {
+        lua_pop(L, 1);
+        return false;
+    }
+    bool replaced = false;
+    for (int i = 1;; ++i) {
+        const char* upname = lua_getupvalue(L, -1, i);
+        if (!upname) break;
+        if (std::string_view(upname) == "GetSimfileChartString") {
+            for (int j = 1;; ++j) {
+                const char* inner = lua_getupvalue(L, -1, j);
+                if (!inner) break;
+                if (std::string_view(inner) == "NormalizeFloatDigits") {
+                    lua_pop(L, 1);
+                    lua_pushlightuserdata(L, ov);
+                    lua_pushcclosure(L, lua_normalize_float_digits_override, 1);
+                    lua_setupvalue(L, -2, j);
+                    replaced = true;
+                    break;
+                }
+                lua_pop(L, 1);
+            }
+            lua_pop(L, 1);
+            break;
+        }
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
+    return replaced;
+}
+
 // ---------------------------------------------------------------------------
 // Lua-driven hash using Simply Love's chart parser (no Lua file modifications).
 namespace {
@@ -469,13 +616,13 @@ static int lua_ivalues(lua_State* L) {
     return 1;
 }
 
-static void extract_sl_hash_bpms(lua_State* L,
+static bool extract_sl_hash_bpms(lua_State* L,
                                  LuaStepsCtx* ctx,
                                  const std::string& steps_type,
                                  const std::string& difficulty,
                                  const std::string& description,
                                  std::string* out_hash_bpms) {
-    if (!out_hash_bpms) return;
+    if (!out_hash_bpms) return false;
     out_hash_bpms->clear();
 
     const int top = lua_gettop(L);
@@ -483,7 +630,7 @@ static void extract_sl_hash_bpms(lua_State* L,
     lua_getglobal(L, "ParseChartInfo");
     if (!lua_isfunction(L, -1)) {
         lua_settop(L, top);
-        return;
+        return false;
     }
     const int parse_idx = lua_gettop(L);
 
@@ -520,15 +667,14 @@ static void extract_sl_hash_bpms(lua_State* L,
 
     if (ref_get_simfile_string == LUA_NOREF || ref_get_simfile_chart_string == LUA_NOREF) {
         cleanup();
-        return;
+        return false;
     }
 
     lua_rawgeti(L, LUA_REGISTRYINDEX, ref_get_simfile_string);
     push_steps_userdata(L, ctx);
     if (lua_pcall(L, 1, 2, 0) != 0) {
-        std::fprintf(stderr, "lua GetSimfileString error: %s\n", lua_tostring(L, -1));
         cleanup();
-        return;
+        return false;
     }
     const std::string simfile_string = lua_tostring(L, -2) ? lua_tostring(L, -2) : "";
     const std::string file_type = lua_tostring(L, -1) ? lua_tostring(L, -1) : "";
@@ -536,7 +682,7 @@ static void extract_sl_hash_bpms(lua_State* L,
 
     if (simfile_string.empty() || file_type.empty()) {
         cleanup();
-        return;
+        return false;
     }
 
     lua_rawgeti(L, LUA_REGISTRYINDEX, ref_get_simfile_chart_string);
@@ -546,9 +692,8 @@ static void extract_sl_hash_bpms(lua_State* L,
     lua_pushstring(L, description.c_str());
     lua_pushstring(L, file_type.c_str());
     if (lua_pcall(L, 5, 2, 0) != 0) {
-        std::fprintf(stderr, "lua GetSimfileChartString error: %s\n", lua_tostring(L, -1));
         cleanup();
-        return;
+        return false;
     }
 
     if (lua_isstring(L, -1)) {
@@ -557,6 +702,7 @@ static void extract_sl_hash_bpms(lua_State* L,
     lua_pop(L, 2);
 
     cleanup();
+    return !out_hash_bpms->empty();
 }
 
 static std::string compute_hash_with_lua(const std::string& simfile_path,
@@ -630,7 +776,18 @@ static std::string compute_hash_with_lua(const std::string& simfile_path,
     }
 
     LuaStepsCtx ctx{simfile_path, steps_type, difficulty, description, timing};
-    extract_sl_hash_bpms(L, &ctx, steps_type, difficulty, description, out_hash_bpms);
+    const bool has_hash_bpms = extract_sl_hash_bpms(L, &ctx, steps_type, difficulty, description, out_hash_bpms);
+    FallbackBpmOverride bpm_override;
+    if (!has_hash_bpms) {
+        const std::string fallback_bpms = raw_bpms_from_msd(simfile_path, steps_type, difficulty, description);
+        if (!fallback_bpms.empty()) {
+            if (out_hash_bpms) {
+                *out_hash_bpms = fallback_bpms;
+            }
+            bpm_override.bpms = fallback_bpms;
+            install_normalize_bpms_override(L, &bpm_override);
+        }
+    }
     // Push an error handler to capture Lua stack traces.
     lua_getglobal(L, "debug");
     lua_getfield(L, -1, "traceback");
@@ -641,7 +798,7 @@ static std::string compute_hash_with_lua(const std::string& simfile_path,
     push_steps_userdata(L, &ctx);
     lua_pushstring(L, "P1");
     if (lua_pcall(L, 2, 0, errfunc) != 0) {
-        std::fprintf(stderr, "lua ParseChartInfo error: %s\n", lua_tostring(L, -1));
+        lua_pop(L, 1);
         lua_close(L);
         return "";
     }
@@ -711,7 +868,6 @@ static std::string compute_hash_with_lua(const std::string& simfile_path,
         } else {
             lua_pushinteger(L, 16);
             if (lua_pcall(L, 2, 1, 0) != 0) {
-                std::fprintf(stderr, "lua GetStreamSequences error: %s\n", lua_tostring(L, -1));
                 lua_pop(L, 1);
             } else if (lua_istable(L, -1)) {
                 size_t len = lua_objlen(L, -1);
@@ -744,7 +900,6 @@ static std::string compute_hash_with_lua(const std::string& simfile_path,
         lua_pushstring(L, "P1");
         lua_pushinteger(L, level);
         if (lua_pcall(L, 2, 1, 0) != 0) {
-            std::fprintf(stderr, "lua breakdown error: %s\n", lua_tostring(L, -1));
             lua_pop(L, 1);
             return;
         }
@@ -760,7 +915,6 @@ static std::string compute_hash_with_lua(const std::string& simfile_path,
         lua_getglobal(L, "GetTotalStreamAndBreakMeasures");
         lua_pushstring(L, "P1");
         if (lua_pcall(L, 1, 2, 0) != 0) {
-            std::fprintf(stderr, "lua stream totals error: %s\n", lua_tostring(L, -1));
             lua_pop(L, 1);
         } else {
             *stream_measures = static_cast<int>(lua_tointeger(L, -2));
