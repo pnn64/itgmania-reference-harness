@@ -732,6 +732,94 @@ static std::string build_sm_stub_simfile(std::string_view steps_type,
     return out;
 }
 
+struct FallbackSimfileOverride {
+    std::string simfile_string;
+    std::string file_type;
+};
+
+struct ParseUpvalueOverride {
+    int index = 0;
+    int original_ref = LUA_NOREF;
+};
+
+static int lua_get_simfile_string_override(lua_State* L) {
+    auto* ov = static_cast<FallbackSimfileOverride*>(lua_touserdata(L, lua_upvalueindex(1)));
+    if (!ov) return 0;
+    lua_pushlstring(L, ov->simfile_string.data(), ov->simfile_string.size());
+    lua_pushlstring(L, ov->file_type.data(), ov->file_type.size());
+    return 2;
+}
+
+static ParseUpvalueOverride install_parsechartinfo_upvalue_override(
+    lua_State* L,
+    std::string_view upvalue_name,
+    lua_CFunction replacement,
+    void* replacement_ctx) {
+    ParseUpvalueOverride out;
+    const int top = lua_gettop(L);
+
+    lua_getglobal(L, "ParseChartInfo");
+    if (!lua_isfunction(L, -1)) {
+        lua_settop(L, top);
+        return out;
+    }
+
+    for (int i = 1;; ++i) {
+        const char* name = lua_getupvalue(L, -1, i);
+        if (!name) break;
+        if (std::string_view(name) == upvalue_name) {
+            out.index = i;
+            out.original_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+            lua_pushlightuserdata(L, replacement_ctx);
+            lua_pushcclosure(L, replacement, 1);
+            lua_setupvalue(L, -2, i);
+            lua_settop(L, top);
+            return out;
+        }
+        lua_pop(L, 1);
+    }
+
+    lua_settop(L, top);
+    return out;
+}
+
+static void restore_parsechartinfo_upvalue_override(lua_State* L, const ParseUpvalueOverride& ov) {
+    if (ov.index <= 0 || ov.original_ref == LUA_NOREF) return;
+
+    const int top = lua_gettop(L);
+    lua_getglobal(L, "ParseChartInfo");
+    if (lua_isfunction(L, -1)) {
+        lua_rawgeti(L, LUA_REGISTRYINDEX, ov.original_ref);
+        lua_setupvalue(L, -2, ov.index);
+    } else {
+        lua_pop(L, 1);
+    }
+    luaL_unref(L, LUA_REGISTRYINDEX, ov.original_ref);
+    lua_settop(L, top);
+}
+
+static void clear_stream_cache(lua_State* L, const char* pn) {
+    const int top = lua_gettop(L);
+    lua_getglobal(L, "SL");
+    if (!lua_istable(L, -1)) {
+        lua_settop(L, top);
+        return;
+    }
+    lua_getfield(L, -1, pn);
+    lua_getfield(L, -1, "Streams");
+    if (lua_istable(L, -1)) {
+        lua_pushstring(L, "");
+        lua_setfield(L, -2, "Filename");
+        lua_pushstring(L, "");
+        lua_setfield(L, -2, "StepsType");
+        lua_pushstring(L, "");
+        lua_setfield(L, -2, "Difficulty");
+        lua_pushstring(L, "");
+        lua_setfield(L, -2, "Description");
+    }
+    lua_settop(L, top);
+}
+
 static int get_simfile_chart_string_ref(lua_State* L) {
     const int top = lua_gettop(L);
     lua_getglobal(L, "ParseChartInfo");
@@ -855,6 +943,52 @@ static std::string fallback_hash_from_notes(lua_State* L,
     return compute_sl_hash(L, chart_string, hash_bpms);
 }
 
+static bool fallback_parse_from_notes(lua_State* L,
+                                      LuaStepsCtx* ctx,
+                                      const Steps* steps,
+                                      const std::string& steps_type,
+                                      const std::string& difficulty,
+                                      const std::string& description,
+                                      const std::string& hash_bpms) {
+    if (!L || !ctx || !steps || hash_bpms.empty()) return false;
+
+    RString note_data_raw;
+    steps->GetSMNoteData(note_data_raw);
+    if (note_data_raw.empty()) return false;
+
+    FallbackSimfileOverride simfile_override;
+    simfile_override.simfile_string = build_sm_stub_simfile(
+        steps_type, description, difficulty, steps->GetMeter(), hash_bpms,
+        std::string_view(note_data_raw.data(), note_data_raw.size()));
+    simfile_override.file_type = "sm";
+
+    const ParseUpvalueOverride upvalue = install_parsechartinfo_upvalue_override(
+        L, "GetSimfileString", lua_get_simfile_string_override, &simfile_override);
+    if (upvalue.index == 0) return false;
+
+    clear_stream_cache(L, "P1");
+
+    const int top = lua_gettop(L);
+    lua_getglobal(L, "debug");
+    lua_getfield(L, -1, "traceback");
+    lua_remove(L, -2);
+    int errfunc = lua_gettop(L);
+
+    lua_getglobal(L, "ParseChartInfo");
+    push_steps_userdata(L, ctx);
+    lua_pushstring(L, "P1");
+    bool ok = true;
+    if (lua_pcall(L, 2, 0, errfunc) != 0) {
+        lua_pop(L, 1);
+        ok = false;
+    }
+    lua_pop(L, 1);
+
+    restore_parsechartinfo_upvalue_override(L, upvalue);
+    lua_settop(L, top);
+    return ok;
+}
+
 static std::string compute_hash_with_lua(const std::string& simfile_path,
                                          const std::string& steps_type,
                                          const std::string& difficulty,
@@ -930,7 +1064,13 @@ static std::string compute_hash_with_lua(const std::string& simfile_path,
     const bool has_hash_bpms = extract_sl_hash_bpms(L, &ctx, steps_type, difficulty, description, out_hash_bpms);
     FallbackBpmOverride bpm_override;
     if (!has_hash_bpms) {
-        const std::string fallback_bpms = raw_bpms_from_msd(simfile_path, steps_type, difficulty, description);
+        std::string fallback_bpms;
+        if (timing) {
+            fallback_bpms = bpm_string_from_timing(timing);
+        }
+        if (fallback_bpms.empty()) {
+            fallback_bpms = raw_bpms_from_msd(simfile_path, steps_type, difficulty, description);
+        }
         if (!fallback_bpms.empty()) {
             if (out_hash_bpms) {
                 *out_hash_bpms = fallback_bpms;
@@ -962,11 +1102,18 @@ static std::string compute_hash_with_lua(const std::string& simfile_path,
     std::string result = lua_tostring(L, -1) ? lua_tostring(L, -1) : "";
     lua_pop(L, 1);
     if (result.empty() && steps && out_hash_bpms && !out_hash_bpms->empty()) {
-        // Fallback: derive SL hash from ITGmania note data when chart lookup fails.
-        const std::string fallback = fallback_hash_from_notes(
-            L, steps, steps_type, difficulty, description, *out_hash_bpms);
-        if (!fallback.empty()) {
-            result = fallback;
+        // Fallback: re-run SL parser with ITGmania note data to populate streams/hashes.
+        if (fallback_parse_from_notes(L, &ctx, steps, steps_type, difficulty, description, *out_hash_bpms)) {
+            lua_getfield(L, -1, "Hash");
+            result = lua_tostring(L, -1) ? lua_tostring(L, -1) : "";
+            lua_pop(L, 1);
+        }
+        if (result.empty()) {
+            const std::string fallback = fallback_hash_from_notes(
+                L, steps, steps_type, difficulty, description, *out_hash_bpms);
+            if (!fallback.empty()) {
+                result = fallback;
+            }
         }
     }
 
