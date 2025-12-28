@@ -705,25 +705,26 @@ static bool extract_sl_hash_bpms(lua_State* L,
     return !out_hash_bpms->empty();
 }
 
-static std::string build_sm_stub_simfile(std::string_view steps_type,
-                                         std::string_view description,
-                                         std::string_view difficulty,
-                                         int meter,
-                                         std::string_view bpms,
-                                         std::string_view note_data) {
+static std::string build_ssc_stub_simfile(std::string_view steps_type,
+                                          std::string_view description,
+                                          std::string_view difficulty,
+                                          int meter,
+                                          std::string_view bpms,
+                                          std::string_view note_data) {
     std::string out;
-    out.reserve(bpms.size() + note_data.size() + steps_type.size() + description.size() + difficulty.size() + 128);
+    out.reserve(bpms.size() + note_data.size() + steps_type.size() + description.size() + difficulty.size() + 160);
     out.append("#BPMS:");
     out.append(bpms);
-    out.append(";\n#NOTES:\n     ");
+    out.append(";\n#NOTEDATA:\n");
+    out.append("#STEPSTYPE:");
     out.append(steps_type);
-    out.append(":\n     ");
+    out.append(";\n#DESCRIPTION:");
     out.append(description);
-    out.append(":\n     ");
+    out.append(";\n#DIFFICULTY:");
     out.append(difficulty);
-    out.append(":\n     ");
+    out.append(";\n#METER:");
     out.append(std::to_string(meter));
-    out.append(":\n     0,0,0,0,0:\n");
+    out.append(";\n#NOTES:\n");
     out.append(note_data);
     if (note_data.empty() || note_data.back() != '\n') {
         out.push_back('\n');
@@ -928,14 +929,14 @@ static std::string fallback_hash_from_notes(lua_State* L,
     if (note_data_raw.empty()) return "";
 
     const std::string simfile_stub =
-        build_sm_stub_simfile(steps_type, description, difficulty, steps->GetMeter(), hash_bpms,
-                              std::string_view(note_data_raw.data(), note_data_raw.size()));
+        build_ssc_stub_simfile(steps_type, description, difficulty, steps->GetMeter(), hash_bpms,
+                               std::string_view(note_data_raw.data(), note_data_raw.size()));
 
     const int chart_ref = get_simfile_chart_string_ref(L);
     if (chart_ref == LUA_NOREF) return "";
 
     std::string chart_string;
-    (void)call_get_simfile_chart_string(L, chart_ref, simfile_stub, steps_type, difficulty, description, "sm",
+    (void)call_get_simfile_chart_string(L, chart_ref, simfile_stub, steps_type, difficulty, description, "ssc",
                                         &chart_string, nullptr);
     luaL_unref(L, LUA_REGISTRYINDEX, chart_ref);
 
@@ -957,10 +958,10 @@ static bool fallback_parse_from_notes(lua_State* L,
     if (note_data_raw.empty()) return false;
 
     FallbackSimfileOverride simfile_override;
-    simfile_override.simfile_string = build_sm_stub_simfile(
+    simfile_override.simfile_string = build_ssc_stub_simfile(
         steps_type, description, difficulty, steps->GetMeter(), hash_bpms,
         std::string_view(note_data_raw.data(), note_data_raw.size()));
-    simfile_override.file_type = "sm";
+    simfile_override.file_type = "ssc";
 
     const ParseUpvalueOverride upvalue = install_parsechartinfo_upvalue_override(
         L, "GetSimfileString", lua_get_simfile_string_override, &simfile_override);
