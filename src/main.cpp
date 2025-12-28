@@ -6,7 +6,7 @@
 
 #include "itgmania_adapter.h"
 
-static constexpr std::string_view kVersion = "0.1.5";
+static constexpr std::string_view kVersion = "0.1.6";
 
 static std::string json_escape(std::string_view s) {
     std::string out;
@@ -118,6 +118,9 @@ static void emit_json_stub(
     out << "  \"title\": \"\",\n";
     out << "  \"subtitle\": \"\",\n";
     out << "  \"artist\": \"\",\n";
+    out << "  \"title_translated\": \"\",\n";
+    out << "  \"subtitle_translated\": \"\",\n";
+    out << "  \"artist_translated\": \"\",\n";
     out << "  \"step_artist\": \"\",\n";
     out << "  \"description\": \"\",\n";
     out << "  \"steps_type\": \"" << json_escape(steps_type) << "\",\n";
@@ -167,6 +170,9 @@ static void emit_chart_json_header(std::ostream& out, const ChartMetrics& m, con
     out << ind2 << "\"title\": \"" << json_escape(m.title) << "\",\n";
     out << ind2 << "\"subtitle\": \"" << json_escape(m.subtitle) << "\",\n";
     out << ind2 << "\"artist\": \"" << json_escape(m.artist) << "\",\n";
+    out << ind2 << "\"title_translated\": \"" << json_escape(m.title_translated) << "\",\n";
+    out << ind2 << "\"subtitle_translated\": \"" << json_escape(m.subtitle_translated) << "\",\n";
+    out << ind2 << "\"artist_translated\": \"" << json_escape(m.artist_translated) << "\",\n";
     out << ind2 << "\"step_artist\": \"" << json_escape(m.step_artist) << "\",\n";
     out << ind2 << "\"description\": \"" << json_escape(m.description) << "\",\n";
     out << ind2 << "\"steps_type\": \"" << json_escape(m.steps_type) << "\",\n";

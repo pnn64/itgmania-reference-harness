@@ -912,9 +912,12 @@ static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Ste
     ChartMetrics out;
     out.status = can_compute_notedata_metrics ? "ok" : "unsupported_steps_type";
     out.simfile = simfile_path;
-    out.title = song.GetDisplayMainTitle();
-    out.subtitle = song.GetDisplaySubTitle();
-    out.artist = song.GetDisplayArtist();
+    out.title = song.GetMainTitle();
+    out.subtitle = song.m_sSubTitle;
+    out.artist = song.m_sArtist;
+    out.title_translated = song.GetDisplayMainTitle();
+    out.subtitle_translated = song.GetDisplaySubTitle();
+    out.artist_translated = song.GetDisplayArtist();
     out.step_artist = steps->GetCredit();
     out.description = steps->GetDescription();
     std::vector<int> lua_notes_pm;

@@ -32,6 +32,9 @@ struct ChartMetrics {
     std::string title;
     std::string subtitle;
     std::string artist;
+    std::string title_translated;
+    std::string subtitle_translated;
+    std::string artist_translated;
     std::string step_artist;
     std::string description;
     std::string steps_type;
