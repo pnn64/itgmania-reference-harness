@@ -143,6 +143,7 @@ find_library(JSONCPP_LIB NAMES jsoncpp)
 set(HARNESS_SOURCES
   src/main.cpp
   src/itgmania_adapter.cpp
+  src/itgmania_step_parity.cpp
 )
 
 if(NOT USE_ITGMANIA_PREBUILT)
