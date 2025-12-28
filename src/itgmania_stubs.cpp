@@ -154,15 +154,26 @@ static Difficulty DifficultyFromString(const RString& in) {
 	RString s(in);
 	s.MakeLower();
 	if (s == "beginner") return Difficulty_Beginner;
-	if (s == "easy" || s == "light") return Difficulty_Easy;
-	if (s == "medium" || s == "standard" || s == "normal") return Difficulty_Medium;
-	if (s == "hard" || s == "heavy" || s == "difficult") return Difficulty_Hard;
-	if (s == "challenge" || s == "oni" || s == "smaniac") return Difficulty_Challenge;
+	if (s == "easy") return Difficulty_Easy;
+	if (s == "medium") return Difficulty_Medium;
+	if (s == "hard") return Difficulty_Hard;
+	if (s == "challenge") return Difficulty_Challenge;
+	if (s == "edit") return Difficulty_Edit;
+	return Difficulty_Invalid;
+}
+static Difficulty OldStyleDifficultyFromString(const RString& in) {
+	RString s(in);
+	s.MakeLower();
+	if (s == "beginner") return Difficulty_Beginner;
+	if (s == "easy" || s == "basic" || s == "light") return Difficulty_Easy;
+	if (s == "medium" || s == "another" || s == "trick" || s == "standard" || s == "difficult") return Difficulty_Medium;
+	if (s == "hard" || s == "ssr" || s == "maniac" || s == "heavy") return Difficulty_Hard;
+	if (s == "smaniac" || s == "challenge" || s == "expert" || s == "oni") return Difficulty_Challenge;
 	if (s == "edit") return Difficulty_Edit;
 	return Difficulty_Invalid;
 }
 Difficulty StringToDifficulty(const RString& s) { return DifficultyFromString(s); }
-Difficulty OldStyleStringToDifficulty(const RString& s) { return DifficultyFromString(s); }
+Difficulty OldStyleStringToDifficulty(const RString& s) { return OldStyleDifficultyFromString(s); }
 InstrumentTrack StringToInstrumentTrack(const RString&) { return InstrumentTrack_Invalid; }
 const RString& InstrumentTrackToString(InstrumentTrack) { static RString empty; return empty; }
 
