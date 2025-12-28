@@ -705,21 +705,172 @@ static bool extract_sl_hash_bpms(lua_State* L,
     return !out_hash_bpms->empty();
 }
 
+static std::string build_sm_stub_simfile(std::string_view steps_type,
+                                         std::string_view description,
+                                         std::string_view difficulty,
+                                         int meter,
+                                         std::string_view bpms,
+                                         std::string_view note_data) {
+    std::string out;
+    out.reserve(bpms.size() + note_data.size() + steps_type.size() + description.size() + difficulty.size() + 128);
+    out.append("#BPMS:");
+    out.append(bpms);
+    out.append(";\n#NOTES:\n     ");
+    out.append(steps_type);
+    out.append(":\n     ");
+    out.append(description);
+    out.append(":\n     ");
+    out.append(difficulty);
+    out.append(":\n     ");
+    out.append(std::to_string(meter));
+    out.append(":\n     0,0,0,0,0:\n");
+    out.append(note_data);
+    if (note_data.empty() || note_data.back() != '\n') {
+        out.push_back('\n');
+    }
+    out.append(";\n");
+    return out;
+}
+
+static int get_simfile_chart_string_ref(lua_State* L) {
+    const int top = lua_gettop(L);
+    lua_getglobal(L, "ParseChartInfo");
+    if (!lua_isfunction(L, -1)) {
+        lua_settop(L, top);
+        return LUA_NOREF;
+    }
+
+    int ref = LUA_NOREF;
+    for (int i = 1;; ++i) {
+        const char* upname = lua_getupvalue(L, -1, i);
+        if (!upname) break;
+        if (std::string_view(upname) == "GetSimfileChartString") {
+            ref = luaL_ref(L, LUA_REGISTRYINDEX);
+            break;
+        }
+        lua_pop(L, 1);
+    }
+
+    lua_settop(L, top);
+    return ref;
+}
+
+static bool call_get_simfile_chart_string(lua_State* L,
+                                          int func_ref,
+                                          const std::string& simfile_string,
+                                          const std::string& steps_type,
+                                          const std::string& difficulty,
+                                          const std::string& description,
+                                          const std::string& file_type,
+                                          std::string* out_chart_string,
+                                          std::string* out_bpms) {
+    if (func_ref == LUA_NOREF) return false;
+
+    const int top = lua_gettop(L);
+    lua_rawgeti(L, LUA_REGISTRYINDEX, func_ref);
+    lua_pushlstring(L, simfile_string.data(), simfile_string.size());
+    lua_pushstring(L, steps_type.c_str());
+    lua_pushstring(L, difficulty.c_str());
+    lua_pushstring(L, description.c_str());
+    lua_pushstring(L, file_type.c_str());
+    if (lua_pcall(L, 5, 2, 0) != 0) {
+        lua_settop(L, top);
+        return false;
+    }
+
+    if (out_chart_string) {
+        *out_chart_string = lua_tostring(L, -2) ? lua_tostring(L, -2) : "";
+    }
+    if (out_bpms) {
+        *out_bpms = lua_tostring(L, -1) ? lua_tostring(L, -1) : "";
+    }
+    lua_settop(L, top);
+    return true;
+}
+
+static std::string compute_sl_hash(lua_State* L, std::string_view chart_string, std::string_view bpms) {
+    if (chart_string.empty() || bpms.empty()) return "";
+
+    std::string data;
+    data.reserve(chart_string.size() + bpms.size());
+    data.append(chart_string);
+    data.append(bpms);
+
+    const int top = lua_gettop(L);
+    lua_getglobal(L, "CRYPTMAN");
+    lua_getfield(L, -1, "SHA1String");
+    if (!lua_isfunction(L, -1)) {
+        lua_settop(L, top);
+        return "";
+    }
+    lua_pushvalue(L, -2);
+    lua_pushlstring(L, data.data(), data.size());
+    if (lua_pcall(L, 2, 1, 0) != 0) {
+        lua_settop(L, top);
+        return "";
+    }
+    lua_getglobal(L, "BinaryToHex");
+    if (!lua_isfunction(L, -1)) {
+        lua_settop(L, top);
+        return "";
+    }
+    lua_pushvalue(L, -2);
+    if (lua_pcall(L, 1, 1, 0) != 0) {
+        lua_settop(L, top);
+        return "";
+    }
+
+    const char* hex = lua_tostring(L, -1);
+    std::string out = hex ? hex : "";
+    if (out.size() > 16) out.resize(16);
+    lua_settop(L, top);
+    return out;
+}
+
+static std::string fallback_hash_from_notes(lua_State* L,
+                                            const Steps* steps,
+                                            const std::string& steps_type,
+                                            const std::string& difficulty,
+                                            const std::string& description,
+                                            const std::string& hash_bpms) {
+    if (!L || !steps || hash_bpms.empty()) return "";
+
+    RString note_data_raw;
+    steps->GetSMNoteData(note_data_raw);
+    if (note_data_raw.empty()) return "";
+
+    const std::string simfile_stub =
+        build_sm_stub_simfile(steps_type, description, difficulty, steps->GetMeter(), hash_bpms,
+                              std::string_view(note_data_raw.data(), note_data_raw.size()));
+
+    const int chart_ref = get_simfile_chart_string_ref(L);
+    if (chart_ref == LUA_NOREF) return "";
+
+    std::string chart_string;
+    (void)call_get_simfile_chart_string(L, chart_ref, simfile_stub, steps_type, difficulty, description, "sm",
+                                        &chart_string, nullptr);
+    luaL_unref(L, LUA_REGISTRYINDEX, chart_ref);
+
+    if (chart_string.empty()) return "";
+    return compute_sl_hash(L, chart_string, hash_bpms);
+}
+
 static std::string compute_hash_with_lua(const std::string& simfile_path,
-                                        const std::string& steps_type,
-                                        const std::string& difficulty,
-                                        const std::string& description,
-                                        TimingData* timing,
-                                        std::string* out_hash_bpms,
-                                        std::string* breakdown_text,
-                                        std::vector<std::string>* breakdown_levels,
-                                        int* stream_measures,
-                                        int* break_measures,
-                                        std::vector<StreamSequenceOut>* stream_sequences,
-                                        std::vector<int>* lua_notes_per_measure,
-                                        std::vector<double>* lua_nps_per_measure,
-                                        std::vector<bool>* lua_equally_spaced,
-                                        double* lua_peak_nps) {
+                                         const std::string& steps_type,
+                                         const std::string& difficulty,
+                                         const std::string& description,
+                                         const Steps* steps,
+                                         TimingData* timing,
+                                         std::string* out_hash_bpms,
+                                         std::string* breakdown_text,
+                                         std::vector<std::string>* breakdown_levels,
+                                         int* stream_measures,
+                                         int* break_measures,
+                                         std::vector<StreamSequenceOut>* stream_sequences,
+                                         std::vector<int>* lua_notes_per_measure,
+                                         std::vector<double>* lua_nps_per_measure,
+                                         std::vector<bool>* lua_equally_spaced,
+                                         double* lua_peak_nps) {
     lua_State* L = luaL_newstate();
     if (!L) return "";
     luaL_openlibs(L);
@@ -810,6 +961,14 @@ static std::string compute_hash_with_lua(const std::string& simfile_path,
     lua_getfield(L, -1, "Hash");
     std::string result = lua_tostring(L, -1) ? lua_tostring(L, -1) : "";
     lua_pop(L, 1);
+    if (result.empty() && steps && out_hash_bpms && !out_hash_bpms->empty()) {
+        // Fallback: derive SL hash from ITGmania note data when chart lookup fails.
+        const std::string fallback = fallback_hash_from_notes(
+            L, steps, steps_type, difficulty, description, *out_hash_bpms);
+        if (!fallback.empty()) {
+            result = fallback;
+        }
+    }
 
     auto load_int_table = [&](const char* name, std::vector<int>& out) {
         lua_getfield(L, -1, name);
@@ -1082,7 +1241,7 @@ static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Ste
     int stream_measures = 0;
     int break_measures = 0;
     std::vector<StreamSequenceOut> stream_sequences;
-    out.hash = compute_hash_with_lua(simfile_path, st_str, diff_str, steps->GetDescription(), td,
+    out.hash = compute_hash_with_lua(simfile_path, st_str, diff_str, steps->GetDescription(), steps, td,
                                      &out.hash_bpms,
                                      &out.streams_breakdown, &breakdown_levels, &stream_measures, &break_measures,
                                      &stream_sequences,
