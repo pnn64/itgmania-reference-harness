@@ -188,6 +188,76 @@ static std::string diff_string(Difficulty d) {
     return to_lower(DifficultyToString(d));
 }
 
+static void apply_song_metadata_fallback(
+    const Song& song,
+    std::string& title,
+    std::string& subtitle,
+    std::string& artist) {
+    RString main_title = song.m_sMainTitle;
+    RString sub_title = song.m_sSubTitle;
+    RString artist_name = song.m_sArtist;
+
+    if (artist_name == "The Dancing Monkeys Project" && main_title.find_first_of('-') != std::string::npos) {
+        std::vector<RString> title_parts;
+        split(main_title, "-", title_parts);
+        if (!title_parts.empty()) {
+            artist_name = title_parts.front();
+            Trim(artist_name);
+            title_parts.erase(title_parts.begin());
+            main_title = join("-", title_parts);
+            Trim(main_title);
+        }
+    }
+
+    Trim(main_title);
+    Trim(sub_title);
+    Trim(artist_name);
+
+    if (main_title.empty()) {
+        NotesLoader::GetMainAndSubTitlesFromFullTitle(
+            Basename(song.GetSongDir()), main_title, sub_title);
+    }
+
+    if (artist_name.empty()) {
+        artist_name = "Unknown artist";
+    }
+
+    title = main_title.c_str();
+    subtitle = sub_title.c_str();
+    artist = artist_name.c_str();
+}
+
+static void compute_display_metadata(
+    const Song& song,
+    const std::string& title,
+    const std::string& subtitle,
+    const std::string& artist,
+    std::string& title_out,
+    std::string& subtitle_out,
+    std::string& artist_out) {
+    bool show_native = true;
+    if (PREFSMAN) {
+        show_native = PREFSMAN->m_bShowNativeLanguage;
+    }
+
+    if (!show_native) {
+        title_out = song.m_sMainTitleTranslit.empty()
+            ? title
+            : song.m_sMainTitleTranslit.c_str();
+        subtitle_out = song.m_sSubTitleTranslit.empty()
+            ? subtitle
+            : song.m_sSubTitleTranslit.c_str();
+        artist_out = song.m_sArtistTranslit.empty()
+            ? artist
+            : song.m_sArtistTranslit.c_str();
+        return;
+    }
+
+    title_out = title;
+    subtitle_out = subtitle;
+    artist_out = artist;
+}
+
 static std::string bpm_string_from_timing(TimingData* td) {
     const std::vector<TimingSegment*>& segments = td->GetTimingSegments(SEGMENT_BPM);
     std::vector<RString> bpm_strings;
@@ -1373,12 +1443,15 @@ static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Ste
     ChartMetrics out;
     out.status = can_compute_notedata_metrics ? "ok" : "unsupported_steps_type";
     out.simfile = simfile_path;
-    out.title = song.GetMainTitle();
-    out.subtitle = song.m_sSubTitle;
-    out.artist = song.m_sArtist;
-    out.title_translated = song.GetDisplayMainTitle();
-    out.subtitle_translated = song.GetDisplaySubTitle();
-    out.artist_translated = song.GetDisplayArtist();
+    apply_song_metadata_fallback(song, out.title, out.subtitle, out.artist);
+    compute_display_metadata(
+        song,
+        out.title,
+        out.subtitle,
+        out.artist,
+        out.title_translated,
+        out.subtitle_translated,
+        out.artist_translated);
     out.step_artist = steps->GetCredit();
     out.description = steps->GetDescription();
     std::vector<int> lua_notes_pm;

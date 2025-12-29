@@ -6,7 +6,7 @@
 
 #include "itgmania_adapter.h"
 
-static constexpr std::string_view kVersion = "0.1.12";
+static constexpr std::string_view kVersion = "0.1.13";
 
 static std::string json_escape(std::string_view s) {
     std::string out;
