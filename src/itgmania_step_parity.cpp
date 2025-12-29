@@ -11,7 +11,6 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
-#include <set>
 #include <vector>
 
 #ifdef ITGMANIA_HARNESS
@@ -21,7 +20,6 @@
 #include "GameState.h"
 #include "NoteData.h"
 #include "NotesLoader.h"
-#include "NotesLoaderDWI.h"
 #include "NotesLoaderSM.h"
 #include "NotesLoaderSSC.h"
 #include "RageUtil.h"
@@ -608,9 +606,6 @@ bool emit_step_parity_dump(
     } else if (ext == "sm" || ext == "sma") {
         SMLoader loader;
         ok = loader.LoadFromSimfile(simfile_path, song);
-    } else if (ext == "dwi") {
-        std::set<RString> blacklisted_images;
-        ok = DWILoader::LoadFromDir(Dirname(simfile_path), song, blacklisted_images);
     } else {
         SSCLoader loader;
         ok = loader.LoadFromSimfile(simfile_path, song);
