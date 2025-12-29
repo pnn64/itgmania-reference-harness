@@ -272,6 +272,7 @@ elseif(USE_ITGMANIA_SOURCES)
   set(ITGMANIA_SOURCES
     ${ITGMANIA_ROOT}/src/StdString.cpp
     ${ITGMANIA_ROOT}/src/RageUtil.cpp
+    ${ITGMANIA_ROOT}/src/RageUtil_CharConversions.cpp
     ${ITGMANIA_ROOT}/src/RageException.cpp
     ${ITGMANIA_ROOT}/src/RageThreads.cpp
     ${ITGMANIA_ROOT}/src/RageTimer.cpp
@@ -291,6 +292,7 @@ elseif(USE_ITGMANIA_SOURCES)
     ${ITGMANIA_ROOT}/src/NotesLoaderSMA.cpp
     ${ITGMANIA_ROOT}/src/NotesLoaderSM.cpp
     ${ITGMANIA_ROOT}/src/NotesLoaderSSC.cpp
+    ${ITGMANIA_ROOT}/src/NotesLoaderDWI.cpp
     ${ITGMANIA_ROOT}/src/ColumnCues.cpp
     ${ITGMANIA_ROOT}/src/MsdFile.cpp
     ${ITGMANIA_ROOT}/src/MeasureInfo.cpp

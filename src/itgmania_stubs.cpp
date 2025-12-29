@@ -547,6 +547,37 @@ void RageFile::PushSelf(lua_State*) {}
 
 // ---------------------------------------------------------------------------
 // RageFileManager (std::filesystem backed)
+static bool glob_match(const std::string& pattern, const std::string& text) {
+	size_t p = 0;
+	size_t t = 0;
+	size_t star = std::string::npos;
+	size_t match = 0;
+
+	while (t < text.size()) {
+		if (p < pattern.size() && (pattern[p] == '?' || pattern[p] == text[t])) {
+			++p;
+			++t;
+			continue;
+		}
+		if (p < pattern.size() && pattern[p] == '*') {
+			star = p++;
+			match = t;
+			continue;
+		}
+		if (star != std::string::npos) {
+			p = star + 1;
+			t = ++match;
+			continue;
+		}
+		return false;
+	}
+
+	while (p < pattern.size() && pattern[p] == '*') {
+		++p;
+	}
+	return p == pattern.size();
+}
+
 RageFileManager::RageFileManager(const RString&) {}
 RageFileManager::~RageFileManager() {}
 void RageFileManager::MountInitialFilesystems() {}
@@ -555,12 +586,32 @@ void RageFileManager::GetDirListing(const RString& path, std::vector<RString>& o
 	using std::filesystem::directory_iterator;
 	out.clear();
 	std::error_code ec;
-	for (const auto& entry : directory_iterator(path.c_str(), ec)) {
+	std::string path_str = path.c_str();
+	const bool has_glob = path_str.find_first_of("*?") != std::string::npos;
+	std::filesystem::path dir_path = path_str;
+	std::string pattern;
+	if (has_glob) {
+		dir_path = dir_path.parent_path();
+		pattern = dir_path.empty() ? path_str : std::filesystem::path(path_str).filename().string();
+		if (dir_path.empty()) {
+			dir_path = ".";
+		}
+	}
+
+	for (const auto& entry : directory_iterator(dir_path, ec)) {
 		if (ec) break;
 		if (onlyDirs && !entry.is_directory()) continue;
-		RString name = returnPathToo ? entry.path().string().c_str()
-		                             : entry.path().filename().string().c_str();
-		out.push_back(name);
+		if (has_glob) {
+			const std::string filename = entry.path().filename().string();
+			if (!glob_match(pattern, filename)) continue;
+			RString name = returnPathToo ? entry.path().string().c_str()
+			                             : filename.c_str();
+			out.push_back(name);
+		} else {
+			RString name = returnPathToo ? entry.path().string().c_str()
+			                             : entry.path().filename().string().c_str();
+			out.push_back(name);
+		}
 	}
 }
 void RageFileManager::GetDirListingWithMultipleExtensions(
@@ -1192,11 +1243,13 @@ void XNode::Free() {
 IniFile::IniFile() = default;
 bool IniFile::ReadFile(const RString&) { return false; }
 
+#ifndef ITGMANIA_HARNESS_SOURCE
 namespace DWILoader {
 void GetApplicableFiles(const RString&, std::vector<RString>& out) { out.clear(); }
 bool LoadFromDir(const RString&, Song&, std::set<RString>&) { return false; }
 bool LoadNoteDataFromSimfile(const RString&, Steps&) { return false; }
 }
+#endif
 namespace KSFLoader {
 void GetApplicableFiles(const RString&, std::vector<RString>& out) { out.clear(); }
 bool LoadFromDir(const RString&, Song&) { return false; }

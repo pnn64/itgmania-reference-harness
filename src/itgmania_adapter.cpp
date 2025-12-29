@@ -21,6 +21,7 @@ extern "C" {
 #include <fstream>
 #include <filesystem>
 #include <optional>
+#include <set>
 #include <unordered_map>
 #include <cstdio>
 #include <tomcrypt.h>
@@ -46,6 +47,7 @@ extern "C" {
 #include "NoteDataUtil.h"
 #include "NoteSkinManager.h"
 #include "NotesLoader.h"
+#include "NotesLoaderDWI.h"
 #include "NotesLoaderSM.h"
 #include "NotesLoaderSSC.h"
 #include "NoteTypes.h"
@@ -357,6 +359,10 @@ static bool load_song(const std::string& simfile_path, Song& song) {
     if (ext == "sm" || ext == "sma") {
         SMLoader loader;
         return loader.LoadFromSimfile(simfile_path, song, false);
+    }
+    if (ext == "dwi") {
+        std::set<RString> blacklisted_images;
+        return DWILoader::LoadFromDir(Dirname(simfile_path), song, blacklisted_images);
     }
     return false;
 }
