@@ -6,11 +6,108 @@
 
 #include "itgmania_adapter.h"
 
-static constexpr std::string_view kVersion = "0.1.13";
+static constexpr std::string_view kVersion = "0.1.14";
+
+static bool is_valid_utf8(std::string_view s) {
+    size_t i = 0;
+    while (i < s.size()) {
+        const unsigned char c = static_cast<unsigned char>(s[i]);
+        if (c < 0x80) {
+            ++i;
+            continue;
+        }
+        if (c < 0xC2) {
+            return false;
+        }
+        int len = 0;
+        if ((c & 0xE0) == 0xC0) {
+            len = 2;
+        } else if ((c & 0xF0) == 0xE0) {
+            len = 3;
+        } else if ((c & 0xF8) == 0xF0) {
+            len = 4;
+        } else {
+            return false;
+        }
+        if (i + static_cast<size_t>(len) > s.size()) {
+            return false;
+        }
+        for (int j = 1; j < len; ++j) {
+            const unsigned char cc = static_cast<unsigned char>(s[i + j]);
+            if ((cc & 0xC0) != 0x80) {
+                return false;
+            }
+        }
+        i += static_cast<size_t>(len);
+    }
+    return true;
+}
+
+static void append_unicode_escape(std::string& out, unsigned int value) {
+    static const char* hex = "0123456789abcdef";
+    out += "\\u";
+    out.push_back(hex[(value >> 12) & 0x0F]);
+    out.push_back(hex[(value >> 8) & 0x0F]);
+    out.push_back(hex[(value >> 4) & 0x0F]);
+    out.push_back(hex[value & 0x0F]);
+}
+
+static void append_utf8(std::string& out, unsigned int value) {
+    if (value <= 0x7F) {
+        out.push_back(static_cast<char>(value));
+    } else if (value <= 0x7FF) {
+        out.push_back(static_cast<char>(0xC0 | (value >> 6)));
+        out.push_back(static_cast<char>(0x80 | (value & 0x3F)));
+    } else if (value <= 0xFFFF) {
+        out.push_back(static_cast<char>(0xE0 | (value >> 12)));
+        out.push_back(static_cast<char>(0x80 | ((value >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (value & 0x3F)));
+    } else {
+        out.push_back(static_cast<char>(0xF0 | (value >> 18)));
+        out.push_back(static_cast<char>(0x80 | ((value >> 12) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | ((value >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (value & 0x3F)));
+    }
+}
+
+static unsigned int cp1252_to_unicode(unsigned char value) {
+    static const unsigned int kMap[32] = {
+        0x20AC, 0xFFFD, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021,
+        0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0xFFFD, 0x017D, 0xFFFD,
+        0xFFFD, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
+        0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0xFFFD, 0x017E, 0x0178
+    };
+    if (value < 0x80 || value > 0x9F) {
+        return value;
+    }
+    return kMap[value - 0x80];
+}
 
 static std::string json_escape(std::string_view s) {
     std::string out;
     out.reserve(s.size());
+    if (!is_valid_utf8(s)) {
+        for (unsigned char uc : s) {
+            switch (uc) {
+                case '\\': out += "\\\\"; break;
+                case '"': out += "\\\""; break;
+                case '\b': out += "\\b"; break;
+                case '\f': out += "\\f"; break;
+                case '\n': out += "\\n"; break;
+                case '\r': out += "\\r"; break;
+                case '\t': out += "\\t"; break;
+                default:
+                    if (uc < 0x20) {
+                        append_unicode_escape(out, uc);
+                    } else if (uc < 0x80) {
+                        out.push_back(static_cast<char>(uc));
+                    } else {
+                        append_utf8(out, cp1252_to_unicode(uc));
+                    }
+            }
+        }
+        return out;
+    }
     for (unsigned char uc : s) {
         switch (uc) {
             case '\\': out += "\\\\"; break;
@@ -22,10 +119,7 @@ static std::string json_escape(std::string_view s) {
             case '\t': out += "\\t"; break;
             default:
                 if (uc < 0x20) {
-                    static const char* hex = "0123456789abcdef";
-                    out += "\\u00";
-                    out.push_back(hex[(uc >> 4) & 0x0F]);
-                    out.push_back(hex[uc & 0x0F]);
+                    append_unicode_escape(out, uc);
                 } else {
                     out.push_back(static_cast<char>(uc));
                 }
