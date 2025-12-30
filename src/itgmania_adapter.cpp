@@ -188,14 +188,121 @@ static std::string diff_string(Difficulty d) {
     return to_lower(DifficultyToString(d));
 }
 
+struct RawSimfileMetadataTags {
+    bool has_title = false;
+    bool has_subtitle = false;
+    bool has_artist = false;
+    std::string title;
+    std::string subtitle;
+    std::string artist;
+};
+
+static std::string ascii_upper(std::string_view text) {
+    std::string out;
+    out.reserve(text.size());
+    for (char c : text) {
+        if (c >= 'a' && c <= 'z') {
+            out.push_back(static_cast<char>(c - ('a' - 'A')));
+        } else {
+            out.push_back(c);
+        }
+    }
+    return out;
+}
+
+static void trim_ascii(std::string& text) {
+    size_t start = 0;
+    while (start < text.size() && std::isspace(static_cast<unsigned char>(text[start])) != 0) {
+        ++start;
+    }
+    size_t end = text.size();
+    while (end > start && std::isspace(static_cast<unsigned char>(text[end - 1])) != 0) {
+        --end;
+    }
+    if (start == 0 && end == text.size()) {
+        return;
+    }
+    text.assign(text.data() + start, end - start);
+}
+
+static bool extract_tag_value(
+    const std::string& data,
+    const std::string& data_upper,
+    const char* tag,
+    std::string& out) {
+    const size_t tag_len = std::strlen(tag);
+    size_t search_pos = 0;
+    bool found = false;
+    std::string value;
+
+    while ((search_pos = data_upper.find(tag, search_pos)) != std::string::npos) {
+        value.clear();
+        bool escaped = false;
+        size_t i = search_pos + tag_len;
+        for (; i < data.size(); ++i) {
+            char c = data[i];
+            if (escaped) {
+                value.push_back(c);
+                escaped = false;
+                continue;
+            }
+            if (c == '\\') {
+                escaped = true;
+                continue;
+            }
+            if (c == ';') {
+                break;
+            }
+            value.push_back(c);
+        }
+
+        out = value;
+        found = true;
+
+        if (i >= data.size()) {
+            break;
+        }
+        search_pos = i + 1;
+    }
+
+    if (found) {
+        trim_ascii(out);
+    }
+
+    return found;
+}
+
+static RawSimfileMetadataTags read_simfile_metadata_tags(const std::string& simfile_path) {
+    RawSimfileMetadataTags out;
+    std::ifstream in(simfile_path, std::ios::binary);
+    if (!in) {
+        return out;
+    }
+
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    const std::string data = ss.str();
+    if (data.empty()) {
+        return out;
+    }
+
+    const std::string data_upper = ascii_upper(data);
+    out.has_title = extract_tag_value(data, data_upper, "#TITLE:", out.title);
+    out.has_subtitle = extract_tag_value(data, data_upper, "#SUBTITLE:", out.subtitle);
+    out.has_artist = extract_tag_value(data, data_upper, "#ARTIST:", out.artist);
+    return out;
+}
+
 static void apply_song_metadata_fallback(
     const Song& song,
+    const std::string& simfile_path,
     std::string& title,
     std::string& subtitle,
     std::string& artist) {
     RString main_title = song.m_sMainTitle;
     RString sub_title = song.m_sSubTitle;
     RString artist_name = song.m_sArtist;
+    bool used_folder_fallback = false;
 
     Trim(main_title);
     Trim(sub_title);
@@ -204,10 +311,26 @@ static void apply_song_metadata_fallback(
     if (main_title.empty()) {
         NotesLoader::GetMainAndSubTitlesFromFullTitle(
             Basename(song.GetSongDir()), main_title, sub_title);
+        used_folder_fallback = true;
     }
 
     if (artist_name.empty()) {
         artist_name = "Unknown artist";
+    }
+
+    if (used_folder_fallback) {
+        const RawSimfileMetadataTags raw = read_simfile_metadata_tags(simfile_path);
+        if (raw.has_title) {
+            main_title = raw.title.c_str();
+            if (raw.has_subtitle) {
+                sub_title = raw.subtitle.c_str();
+            } else {
+                sub_title = "";
+            }
+            if (raw.has_artist) {
+                artist_name = raw.artist.c_str();
+            }
+        }
     }
 
     title = main_title.c_str();
@@ -1431,7 +1554,7 @@ static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Ste
     ChartMetrics out;
     out.status = can_compute_notedata_metrics ? "ok" : "unsupported_steps_type";
     out.simfile = simfile_path;
-    apply_song_metadata_fallback(song, out.title, out.subtitle, out.artist);
+    apply_song_metadata_fallback(song, simfile_path, out.title, out.subtitle, out.artist);
     compute_display_metadata(
         song,
         out.title,
