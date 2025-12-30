@@ -197,18 +197,6 @@ static void apply_song_metadata_fallback(
     RString sub_title = song.m_sSubTitle;
     RString artist_name = song.m_sArtist;
 
-    if (artist_name == "The Dancing Monkeys Project" && main_title.find_first_of('-') != std::string::npos) {
-        std::vector<RString> title_parts;
-        split(main_title, "-", title_parts);
-        if (!title_parts.empty()) {
-            artist_name = title_parts.front();
-            Trim(artist_name);
-            title_parts.erase(title_parts.begin());
-            main_title = join("-", title_parts);
-            Trim(main_title);
-        }
-    }
-
     Trim(main_title);
     Trim(sub_title);
     Trim(artist_name);
