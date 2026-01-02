@@ -1531,6 +1531,9 @@ static MeasureStatsOut get_measure_stats(
 static double get_duration_seconds(Steps* steps, TimingData* timing) {
     NoteData nd;
     steps->GetNoteData(nd);
+    if (nd.IsEmpty()) {
+        return 0.0;
+    }
     const float last_beat = nd.GetLastBeat();
     return timing->GetElapsedTimeFromBeat(last_beat);
 }
