@@ -188,6 +188,19 @@ static std::string diff_string(Difficulty d) {
     return to_lower(DifficultyToString(d));
 }
 
+static std::string sl_chart_key(const Steps* steps) {
+    const std::string steps_type = steps_type_string(steps);
+    const std::string difficulty = diff_string(steps->GetDifficulty());
+    std::string key = steps_type;
+    key.push_back('\n');
+    key.append(difficulty);
+    if (difficulty == "edit") {
+        key.push_back('\n');
+        key.append(steps->GetDescription());
+    }
+    return key;
+}
+
 struct RawSimfileMetadataTags {
     bool has_title = false;
     bool has_subtitle = false;
@@ -1177,6 +1190,7 @@ static std::string compute_hash_with_lua(const std::string& simfile_path,
                                          const std::string& description,
                                          const Steps* steps,
                                          TimingData* timing,
+                                         bool force_steps_parse,
                                          std::string* out_hash_bpms,
                                          std::string* breakdown_text,
                                          std::vector<std::string>* breakdown_levels,
@@ -1243,7 +1257,12 @@ static std::string compute_hash_with_lua(const std::string& simfile_path,
     }
 
     LuaStepsCtx ctx{simfile_path, steps_type, difficulty, description, timing};
-    const bool has_hash_bpms = extract_sl_hash_bpms(L, &ctx, steps_type, difficulty, description, out_hash_bpms);
+    const bool allow_force_parse = force_steps_parse && steps && out_hash_bpms;
+    if (allow_force_parse && out_hash_bpms) {
+        out_hash_bpms->clear();
+    }
+    const bool has_hash_bpms = !allow_force_parse
+        && extract_sl_hash_bpms(L, &ctx, steps_type, difficulty, description, out_hash_bpms);
     FallbackBpmOverride bpm_override;
     if (!has_hash_bpms) {
         std::string fallback_bpms;
@@ -1261,21 +1280,27 @@ static std::string compute_hash_with_lua(const std::string& simfile_path,
             install_normalize_bpms_override(L, &bpm_override);
         }
     }
-    // Push an error handler to capture Lua stack traces.
-    lua_getglobal(L, "debug");
-    lua_getfield(L, -1, "traceback");
-    lua_remove(L, -2); // remove debug table, leave traceback on stack
-    int errfunc = lua_gettop(L);
-
-    lua_getglobal(L, "ParseChartInfo");
-    push_steps_userdata(L, &ctx);
-    lua_pushstring(L, "P1");
-    if (lua_pcall(L, 2, 0, errfunc) != 0) {
-        lua_pop(L, 1);
-        lua_close(L);
-        return "";
+    bool parsed = false;
+    if (allow_force_parse && out_hash_bpms && !out_hash_bpms->empty()) {
+        parsed = fallback_parse_from_notes(L, &ctx, steps, steps_type, difficulty, description, *out_hash_bpms);
     }
-    lua_pop(L, 1); // pop traceback handler
+    if (!parsed) {
+        // Push an error handler to capture Lua stack traces.
+        lua_getglobal(L, "debug");
+        lua_getfield(L, -1, "traceback");
+        lua_remove(L, -2); // remove debug table, leave traceback on stack
+        int errfunc = lua_gettop(L);
+
+        lua_getglobal(L, "ParseChartInfo");
+        push_steps_userdata(L, &ctx);
+        lua_pushstring(L, "P1");
+        if (lua_pcall(L, 2, 0, errfunc) != 0) {
+            lua_pop(L, 1);
+            lua_close(L);
+            return "";
+        }
+        lua_pop(L, 1); // pop traceback handler
+    }
 
     lua_getglobal(L, "SL");
     lua_getfield(L, -1, "P1");
@@ -1285,10 +1310,12 @@ static std::string compute_hash_with_lua(const std::string& simfile_path,
     lua_pop(L, 1);
     if (result.empty() && steps && out_hash_bpms && !out_hash_bpms->empty()) {
         // Fallback: re-run SL parser with ITGmania note data to populate streams/hashes.
-        if (fallback_parse_from_notes(L, &ctx, steps, steps_type, difficulty, description, *out_hash_bpms)) {
-            lua_getfield(L, -1, "Hash");
-            result = lua_tostring(L, -1) ? lua_tostring(L, -1) : "";
-            lua_pop(L, 1);
+        if (!allow_force_parse) {
+            if (fallback_parse_from_notes(L, &ctx, steps, steps_type, difficulty, description, *out_hash_bpms)) {
+                lua_getfield(L, -1, "Hash");
+                result = lua_tostring(L, -1) ? lua_tostring(L, -1) : "";
+                lua_pop(L, 1);
+            }
         }
         if (result.empty()) {
             const std::string fallback = fallback_hash_from_notes(
@@ -1504,9 +1531,6 @@ static MeasureStatsOut get_measure_stats(
 static double get_duration_seconds(Steps* steps, TimingData* timing) {
     NoteData nd;
     steps->GetNoteData(nd);
-    if (nd.IsEmpty()) {
-        return 0.0;
-    }
     const float last_beat = nd.GetLastBeat();
     return timing->GetElapsedTimeFromBeat(last_beat);
 }
@@ -1542,7 +1566,8 @@ static void fill_tech_counts(ChartMetrics& out, const TechCounts& tech) {
     out.tech.doublesteps = static_cast<int>(tech[TechCountsCategory_Doublesteps]);
 }
 
-static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Steps* steps, const Song& song) {
+static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Steps* steps, const Song& song,
+                                            bool force_steps_parse) {
     TimingData* const td = steps->GetTimingData();
     td->TidyUpData(false);
 
@@ -1577,6 +1602,7 @@ static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Ste
     int break_measures = 0;
     std::vector<StreamSequenceOut> stream_sequences;
     out.hash = compute_hash_with_lua(simfile_path, st_str, diff_str, steps->GetDescription(), steps, td,
+                                     force_steps_parse,
                                      &out.hash_bpms,
                                      &out.streams_breakdown, &breakdown_levels, &stream_measures, &break_measures,
                                      &stream_sequences,
@@ -1671,13 +1697,27 @@ std::optional<ChartMetrics> parse_chart_with_itgmania(
         return std::nullopt;
     }
 
-    Steps* steps = select_steps(song.GetAllSteps(), steps_type_req, difficulty_req, description_req);
+    const auto& all_steps = song.GetAllSteps();
+    std::unordered_map<std::string, int> key_counts;
+    key_counts.reserve(all_steps.size());
+    for (Steps* s : all_steps) {
+        key_counts[sl_chart_key(s)] += 1;
+    }
+
+    Steps* steps = select_steps(all_steps, steps_type_req, difficulty_req, description_req);
     if (!steps) {
         std::fprintf(stderr, "No matching steps for %s\n", simfile_path.c_str());
         return std::nullopt;
     }
 
-    return build_metrics_for_steps(simfile_path, steps, song);
+    bool force_steps_parse = false;
+    const std::string key = sl_chart_key(steps);
+    auto it = key_counts.find(key);
+    if (it != key_counts.end() && it->second > 1) {
+        force_steps_parse = true;
+    }
+
+    return build_metrics_for_steps(simfile_path, steps, song, force_steps_parse);
 }
 
 std::vector<ChartMetrics> parse_all_charts_with_itgmania(
@@ -1699,6 +1739,12 @@ std::vector<ChartMetrics> parse_all_charts_with_itgmania(
     }
 
     const auto& all_steps = song.GetAllSteps();
+    std::unordered_map<std::string, int> key_counts;
+    key_counts.reserve(all_steps.size());
+    for (Steps* steps : all_steps) {
+        key_counts[sl_chart_key(steps)] += 1;
+    }
+
     for (Steps* steps : all_steps) {
         std::string st_str = steps_type_string(steps);
         std::string diff_str = diff_string(steps->GetDifficulty());
@@ -1706,7 +1752,9 @@ std::vector<ChartMetrics> parse_all_charts_with_itgmania(
         if (!difficulty_req.empty() && diff_str != difficulty_req) continue;
         if (steps->GetDifficulty() == Difficulty_Edit && !description_req.empty() && steps->GetDescription() != description_req) continue;
 
-        out.push_back(build_metrics_for_steps(simfile_path, steps, song));
+        const std::string key = sl_chart_key(steps);
+        const bool force_steps_parse = key_counts[key] > 1;
+        out.push_back(build_metrics_for_steps(simfile_path, steps, song, force_steps_parse));
     }
 
     return out;
