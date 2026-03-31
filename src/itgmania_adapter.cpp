@@ -390,6 +390,17 @@ static void compute_display_metadata(
     artist_out = artist;
 }
 
+static std::string bpm_string_from_timing(TimingData* td) {
+    const std::vector<TimingSegment*>& segments = td->GetTimingSegments(SEGMENT_BPM);
+    std::vector<RString> bpm_strings;
+    bpm_strings.reserve(segments.size());
+    for (TimingSegment* segment : segments) {
+        const BPMSegment* bpm_segment = ToBPM(segment);
+        bpm_strings.push_back(ssprintf("%.6f=%.6f", bpm_segment->GetBeat(), bpm_segment->GetBPM()));
+    }
+    return join(",", bpm_strings);
+}
+
 class MemoryRageFile final : public RageFileBasic {
   public:
     MemoryRageFile() = default;
@@ -671,120 +682,6 @@ static bool load_song(const std::string& simfile_path, Song& song) {
         return loader.LoadFromSimfile(simfile_path, song, false);
     }
     return false;
-}
-
-static std::string raw_bpms_from_msd(const MsdFile& msd,
-                                     const std::string& file_type,
-                                     const std::string& steps_type,
-                                     const std::string& difficulty,
-                                     const std::string& description) {
-    auto normalize_steps = [&](const RString& value) -> std::string {
-        RString out = value;
-        Trim(out);
-        return normalize_steps_type_string(out.c_str());
-    };
-    auto normalize_diff = [&](const RString& value) -> std::string {
-        RString out = value;
-        Trim(out);
-        return to_lower(out.c_str());
-    };
-    auto normalize_desc = [&](const RString& value) -> std::string {
-        RString out = value;
-        Trim(out);
-        return out.c_str();
-    };
-
-    if (file_type != "ssc") {
-        const unsigned values = msd.GetNumValues();
-        for (unsigned i = 0; i < values; ++i) {
-            const MsdFile::value_t& params = msd.GetValue(i);
-            RString tag = params[0];
-            MakeUpper(tag);
-            if (tag == "BPMS") {
-                return params[1];
-            }
-        }
-        return {};
-    }
-
-    RString top_bpms;
-    bool in_steps = false;
-    RString step_type_raw;
-    RString diff_raw;
-    RString desc_raw;
-    RString chart_bpms;
-
-    const unsigned values = msd.GetNumValues();
-    for (unsigned i = 0; i < values; ++i) {
-        const MsdFile::value_t& params = msd.GetValue(i);
-        RString tag = params[0];
-        MakeUpper(tag);
-
-        if (!in_steps) {
-            if (tag == "BPMS") {
-                top_bpms = params[1];
-            } else if (tag == "NOTEDATA") {
-                in_steps = true;
-                step_type_raw = "";
-                diff_raw = "";
-                desc_raw = "";
-                chart_bpms = "";
-            }
-            continue;
-        }
-
-        if (tag == "STEPSTYPE") {
-            step_type_raw = params[1];
-        } else if (tag == "DIFFICULTY") {
-            diff_raw = params[1];
-        } else if (tag == "DESCRIPTION") {
-            desc_raw = params[1];
-        } else if (tag == "BPMS") {
-            chart_bpms = params[1];
-        } else if (tag == "NOTES" || tag == "NOTES2" || tag == "STEPFILENAME") {
-            const std::string step_type_norm = normalize_steps(step_type_raw);
-            const std::string diff_norm = normalize_diff(diff_raw);
-            const std::string desc_norm = normalize_desc(desc_raw);
-
-            bool match = (steps_type.empty() || step_type_norm == steps_type) &&
-                (difficulty.empty() || diff_norm == difficulty);
-            if (match && diff_norm == "edit" && !description.empty()) {
-                match = desc_norm == description;
-            }
-
-            if (match) {
-                if (!chart_bpms.empty()) return chart_bpms;
-                if (!top_bpms.empty()) return top_bpms;
-                return {};
-            }
-            in_steps = false;
-        }
-    }
-
-    if (!top_bpms.empty()) return top_bpms;
-    return {};
-}
-
-static std::string raw_bpms_from_msd_file(const std::string& simfile_path,
-                                          const std::string& steps_type,
-                                          const std::string& difficulty,
-                                          const std::string& description) {
-    MsdFile msd;
-    if (!msd.ReadFile(simfile_path, true)) {
-        return {};
-    }
-    return raw_bpms_from_msd(msd, normalize_simfile_file_type(simfile_path), steps_type, difficulty, description);
-}
-
-static std::string raw_bpms_from_msd_string(const std::string& simfile_string,
-                                            const std::string& file_type,
-                                            const std::string& steps_type,
-                                            const std::string& difficulty,
-                                            const std::string& description) {
-    if (simfile_string.empty() || file_type.empty()) return {};
-    MsdFile msd;
-    msd.ReadFromString(simfile_string, true);
-    return raw_bpms_from_msd(msd, file_type, steps_type, difficulty, description);
 }
 
 // ---------------------------------------------------------------------------
@@ -1713,17 +1610,7 @@ static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Ste
     int break_measures = 0;
     std::vector<StreamSequenceOut> stream_sequences;
     SerializedChartSource serialized_source;
-    if (serialize_chart_with_itgmania(simfile_path, song, steps, &serialized_source)) {
-        out.bpms = raw_bpms_from_msd_string(
-            serialized_source.simfile_string,
-            serialized_source.file_type,
-            st_str,
-            diff_str,
-            steps->GetDescription());
-    }
-    if (out.bpms.empty()) {
-        out.bpms = raw_bpms_from_msd_file(simfile_path, st_str, diff_str, steps->GetDescription());
-    }
+    out.bpms = bpm_string_from_timing(td);
     out.hash = compute_hash_with_lua(simfile_path, st_str, diff_str, steps->GetDescription(), td,
                                      force_steps_parse,
                                      &serialized_source,
