@@ -344,14 +344,12 @@ template<> void Push<int>(lua_State* L, int const& v) { lua_pushinteger(L, v); }
 template<> void Push<double>(lua_State* L, double const& v) { lua_pushnumber(L, v); }
 template<> void Push<Difficulty>(lua_State* L, Difficulty const& v) { lua_pushinteger(L, v); }
 template<> void Push<PlayerNumber>(lua_State* L, PlayerNumber const& v) { lua_pushinteger(L, v); }
-template<> void Push<RString>(lua_State* L, RString const& v) { lua_pushlstring(L, v.data(), v.size()); }
 template<> void Push<std::string>(lua_State* L, std::string const& v) { lua_pushlstring(L, v.data(), v.size()); }
 template<> void Push<RageColor>(lua_State* L, RageColor const&) { lua_newtable(L); }
 
 template<> bool FromStack<float>(lua_State* L, float& out, int i) { out = static_cast<float>(lua_tonumber(L, i)); return true; }
 template<> bool FromStack<bool>(lua_State* L, bool& out, int i) { out = lua_toboolean(L, i) != 0; return true; }
 template<> bool FromStack<int>(lua_State* L, int& out, int i) { out = static_cast<int>(lua_tointeger(L, i)); return true; }
-template<> bool FromStack<RString>(lua_State* L, RString& out, int i) { size_t len = 0; const char* s = lua_tolstring(L, i, &len); out.assign(s ? s : "", len); return true; }
 template<> bool FromStack<std::string>(lua_State* L, std::string& out, int i) { size_t len = 0; const char* s = lua_tolstring(L, i, &len); out.assign(s ? s : "", len); return true; }
 template<> bool FromStack<RageColor>(lua_State*, RageColor& out, int) { out = RageColor(); return true; }
 
