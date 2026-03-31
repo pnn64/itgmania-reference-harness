@@ -375,6 +375,7 @@ template<> bool FromStack<std::string>(lua_State* L, std::string& out, int i) { 
 template<> bool FromStack<RageColor>(lua_State*, RageColor& out, int) { out = RageColor(); return true; }
 
 void PushValueFunc(lua_State*, int) {}
+bool RunScriptOnStack(Lua*, std::string&, int, int, bool) { return false; }
 bool RunExpression(Lua*, const RString&, const RString&) { return false; }
 void DeepCopy(lua_State*) {}
 
@@ -1186,6 +1187,8 @@ const RString SBE_StretchNormal = "";
 const RString SBE_StretchNoLoop = "";
 const RString SBE_StretchRewind = "";
 const RString SBT_CrossFade = "";
+const RString EDIT_STEPS_SUBDIR = "Edits/";
+const RString EDIT_COURSES_SUBDIR = "EditCourses/";
 
 #ifndef ITGMANIA_HARNESS_SOURCE
 void XNodeStringValue::GetValue(RString& out) const { out = m_sValue; }
@@ -1227,6 +1230,7 @@ void XNodeStringValue::SetValueFromStack(lua_State* L) {
 	const char* s = lua_tostring(L, -1);
 	m_sValue = s ? s : "";
 }
+#endif
 
 namespace BackgroundUtil {
 void AddBackgroundChange(std::vector<BackgroundChange>& changes, BackgroundChange change) {
@@ -1269,6 +1273,7 @@ const std::string& ProfileManager::GetProfileDir(ProfileSlot) const {
 	return empty;
 }
 
+#ifndef ITGMANIA_HARNESS_SOURCE
 XNode::XNode() : m_sName("") {}
 XNode::XNode(const RString& sName) : m_sName(sName) {}
 XNode::XNode(const XNode& cpy) : m_sName(cpy.m_sName) {}
