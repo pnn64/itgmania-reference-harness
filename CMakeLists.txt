@@ -292,6 +292,8 @@ elseif(USE_ITGMANIA_SOURCES)
     ${ITGMANIA_ROOT}/src/NotesLoaderSMA.cpp
     ${ITGMANIA_ROOT}/src/NotesLoaderSM.cpp
     ${ITGMANIA_ROOT}/src/NotesLoaderSSC.cpp
+    ${ITGMANIA_ROOT}/src/NotesWriterSM.cpp
+    ${ITGMANIA_ROOT}/src/NotesWriterSSC.cpp
     ${ITGMANIA_ROOT}/src/ColumnCues.cpp
     ${ITGMANIA_ROOT}/src/MsdFile.cpp
     ${ITGMANIA_ROOT}/src/MeasureInfo.cpp

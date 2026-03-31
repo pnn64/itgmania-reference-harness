@@ -15,6 +15,7 @@ extern "C" {
 #include "GameState.h"
 #include "MessageManager.h"
 #include "PrefsManager.h"
+#include "ProfileManager.h"
 #include "SongManager.h"
 #include "RageFile.h"
 #include "RageFileManager.h"
@@ -46,6 +47,7 @@ extern "C" {
 #include <tomcrypt.h>
 
 #include <array>
+#include <algorithm>
 #include <cctype>
 #include <cerrno>
 #include <cstdint>
@@ -84,6 +86,7 @@ RageFileManager* FILEMAN = &gFileManager;
 MessageManager* MESSAGEMAN = &gMessageManager;
 LuaManager* LUA = nullptr;
 SongManager* SONGMAN = &gSongManager;
+ProfileManager* PROFILEMAN = nullptr;
 // ScreenMessage constants provided by real ScreenMessage.cpp now.
 
 // ---------------------------------------------------------------------------
@@ -175,8 +178,26 @@ static Difficulty OldStyleDifficultyFromString(const RString& in) {
 }
 Difficulty StringToDifficulty(const RString& s) { return DifficultyFromString(s); }
 Difficulty OldStyleStringToDifficulty(const RString& s) { return OldStyleDifficultyFromString(s); }
-InstrumentTrack StringToInstrumentTrack(const RString&) { return InstrumentTrack_Invalid; }
-const RString& InstrumentTrackToString(InstrumentTrack) { static RString empty; return empty; }
+InstrumentTrack StringToInstrumentTrack(const RString& in) {
+	RString s(in);
+	MakeLower(s);
+	if (s == "guitar") return InstrumentTrack_Guitar;
+	if (s == "rhythm") return InstrumentTrack_Rhythm;
+	if (s == "bass") return InstrumentTrack_Bass;
+	return InstrumentTrack_Invalid;
+}
+const RString& InstrumentTrackToString(InstrumentTrack track) {
+	static RString guitar = make_rstring("Guitar");
+	static RString rhythm = make_rstring("Rhythm");
+	static RString bass = make_rstring("Bass");
+	static RString invalid;
+	switch (track) {
+		case InstrumentTrack_Guitar: return guitar;
+		case InstrumentTrack_Rhythm: return rhythm;
+		case InstrumentTrack_Bass: return bass;
+		default: return invalid;
+	}
+}
 
 LocalizedString::LocalizedString(const RString&, const RString&) : m_pImpl(nullptr) {}
 LocalizedString::LocalizedString(LocalizedString const&) : m_pImpl(nullptr) {}
@@ -389,42 +410,62 @@ uint64_t GetInvalidThreadId() { return 0; }
 // Minimal RageFile backed by std::ifstream
 class RageFileStd final : public RageFileBasic {
   public:
-	RageFileStd() : m_size(-1) {}
-	explicit RageFileStd(const RString& path) : m_path(path), m_size(-1) {}
+	RageFileStd() : m_mode(0), m_size(-1) {}
+	explicit RageFileStd(const RString& path, int mode = 0)
+		: m_path(path), m_mode(mode), m_size(-1) {}
 
-	RageFileBasic* Copy() const override { return new RageFileStd(m_path); }
+	RageFileBasic* Copy() const override {
+		auto* copy = new RageFileStd(m_path, m_mode);
+		if (!m_path.empty() && copy->Open(m_path, m_mode)) {
+			const int pos = Tell();
+			if (pos >= 0) copy->Seek(pos);
+		}
+		return copy;
+	}
 	RString GetDisplayPath() const override { return m_path; }
 	RString GetError() const override { return m_error; }
 	void ClearError() override { m_error.clear(); }
-	bool AtEOF() const override { return !m_stream || m_stream->eof(); }
+	bool AtEOF() const override { return !m_stream || ((m_mode & RageFile::READ) && m_stream->eof()); }
 
 	int Seek(int offset) override {
 		if (!m_stream) return -1;
 		m_stream->clear();
-		m_stream->seekg(offset, std::ios::beg);
-		return static_cast<int>(m_stream->tellg());
+		if (m_mode & RageFile::READ) {
+			m_stream->seekg(offset, std::ios::beg);
+		}
+		if (m_mode & RageFile::WRITE) {
+			m_stream->seekp(offset, std::ios::beg);
+		}
+		return Tell();
 	}
 	int Seek(int offset, int whence) override {
 		if (!m_stream) return -1;
 		std::ios::seekdir dir = std::ios::beg;
-		if (whence == std::ios::cur) dir = std::ios::cur;
-		else if (whence == std::ios::end) dir = std::ios::end;
+		if (whence == SEEK_CUR) dir = std::ios::cur;
+		else if (whence == SEEK_END) dir = std::ios::end;
 		m_stream->clear();
-		m_stream->seekg(offset, dir);
-		return static_cast<int>(m_stream->tellg());
+		if (m_mode & RageFile::READ) {
+			m_stream->seekg(offset, dir);
+		}
+		if (m_mode & RageFile::WRITE) {
+			m_stream->seekp(offset, dir);
+		}
+		return Tell();
 	}
 	int Tell() const override {
 		if (!m_stream) return -1;
-		return static_cast<int>(m_stream->tellg());
+		const std::streampos pos =
+			(m_mode & RageFile::READ) ? m_stream->tellg() : m_stream->tellp();
+		return (pos == std::streampos(-1)) ? -1 : static_cast<int>(pos);
 	}
 
 	int Read(void* buffer, size_t bytes) override {
-		if (!m_stream) return -1;
+		if (!m_stream || !(m_mode & RageFile::READ)) return -1;
 		m_stream->read(static_cast<char*>(buffer), static_cast<std::streamsize>(bytes));
 		return static_cast<int>(m_stream->gcount());
 	}
 	int Read(RString& buffer, int bytes = -1) override {
-		if (!m_stream) return -1;
+		if (!m_stream || !(m_mode & RageFile::READ)) return -1;
 		if (bytes < 0) {
 			std::ostringstream ss;
 			ss << m_stream->rdbuf();
@@ -436,22 +477,47 @@ class RageFileStd final : public RageFileBasic {
 		return static_cast<int>(m_stream->gcount());
 	}
 	int Read(void* buffer, size_t bytes, int nmemb) override {
-		return Read(buffer, bytes * static_cast<size_t>(nmemb));
+		const int read = Read(buffer, bytes * static_cast<size_t>(nmemb));
+		if (read < 0 || bytes == 0) return read;
+		return read / static_cast<int>(bytes);
 	}
 
-	int Write(const void*, size_t) override { return -1; }
-	int Write(const RString&) override { return -1; }
-	int Write(const void*, size_t, int) override { return -1; }
-	int Flush() override { return 0; }
+	int Write(const void* buffer, size_t bytes) override {
+		if (!m_stream || !(m_mode & RageFile::WRITE)) return -1;
+		m_stream->write(static_cast<const char*>(buffer), static_cast<std::streamsize>(bytes));
+		if (!*m_stream) {
+			m_error = "write failed";
+			return -1;
+		}
+		m_size = -1;
+		return 0;
+	}
+	int Write(const RString& s) override { return Write(s.data(), s.size()); }
+	int Write(const void* buffer, size_t bytes, int nmemb) override {
+		return Write(buffer, bytes * static_cast<size_t>(nmemb));
+	}
+	int Flush() override {
+		if (!m_stream) return -1;
+		m_stream->flush();
+		if (!*m_stream) {
+			m_error = "flush failed";
+			return -1;
+		}
+		return 0;
+	}
 
 	int GetLine(RString& out) override {
-		if (!m_stream) return -1;
+		if (!m_stream || !(m_mode & RageFile::READ)) return -1;
 		std::string line;
 		if (!std::getline(*m_stream, line)) return 0;
+		if (!line.empty() && line.back() == '\r') line.pop_back();
 		out = line;
 		return static_cast<int>(out.size());
 	}
-	int PutLine(const RString&) override { return -1; }
+	int PutLine(const RString& s) override {
+		if (Write(s) == -1) return -1;
+		return Write("\r\n", 2);
+	}
 
 	void EnableCRC32(bool) override {}
 	bool GetCRC32(uint32_t*) override { return false; }
@@ -459,6 +525,14 @@ class RageFileStd final : public RageFileBasic {
 	int GetFileSize() const override {
 		if (m_size >= 0) return m_size;
 		if (!m_stream) return -1;
+		if (m_mode & RageFile::WRITE) {
+			m_stream->flush();
+			std::error_code ec;
+			const auto size = std::filesystem::file_size(m_path.c_str(), ec);
+			if (ec) return -1;
+			m_size = static_cast<int>(size);
+			return m_size;
+		}
 		auto cur = m_stream->tellg();
 		m_stream->seekg(0, std::ios::end);
 		m_size = static_cast<int>(m_stream->tellg());
@@ -467,10 +541,21 @@ class RageFileStd final : public RageFileBasic {
 	}
 	int GetFD() override { return -1; }
 
-	bool Open(const RString& path, int /*mode*/) {
+	bool Open(const RString& path, int mode) {
 		m_path = path;
+		m_mode = mode;
 		m_error.clear();
-		m_stream.reset(new std::ifstream(path.c_str(), std::ios::binary));
+		std::ios::openmode open_mode = std::ios::binary;
+		if (mode & RageFile::READ) open_mode |= std::ios::in;
+		if (mode & RageFile::WRITE) {
+			open_mode |= std::ios::out | std::ios::trunc;
+			std::error_code ec;
+			const auto parent = std::filesystem::path(path.c_str()).parent_path();
+			if (!parent.empty()) {
+				std::filesystem::create_directories(parent, ec);
+			}
+		}
+		m_stream.reset(new std::fstream(path.c_str(), open_mode));
 		if (!*m_stream) {
 			m_error = "open failed";
 			m_stream.reset();
@@ -480,12 +565,13 @@ class RageFileStd final : public RageFileBasic {
 		return true;
 	}
 
-  private:
-	RString m_path;
-	mutable int m_size;
-	RString m_error;
-	std::unique_ptr<std::ifstream> m_stream;
-};
+	  private:
+		RString m_path;
+		int m_mode;
+		mutable int m_size;
+		RString m_error;
+		mutable std::unique_ptr<std::fstream> m_stream;
+	};
 
 RageFile::RageFile() : m_File(nullptr), m_Mode(0) {}
 RageFile::RageFile(const RageFile& cpy) : RageFileBasic(cpy) {
@@ -500,8 +586,12 @@ RageFile* RageFile::Copy() const { return new RageFile(*this); }
 RString RageFile::GetPath() const { return m_Path; }
 bool RageFile::Open(const RString& path, int mode) {
 	Close();
-	if (!(mode & READ)) {
-		SetError("write unsupported in harness");
+	if ((mode & READ) && (mode & WRITE)) {
+		SetError("Reading and writing are mutually exclusive");
+		return false;
+	}
+	if (!(mode & READ) && !(mode & WRITE)) {
+		SetError("Neither reading nor writing specified");
 		return false;
 	}
 	m_Mode = mode;
@@ -517,12 +607,15 @@ bool RageFile::Open(const RString& path, int mode) {
 }
 void RageFile::Close() {
 	if (m_File) {
+		if (m_Mode & WRITE) {
+			m_File->Flush();
+		}
 		delete m_File;
 		m_File = nullptr;
 	}
 }
 int RageFile::GetLine(RString& out) { return m_File ? m_File->GetLine(out) : -1; }
-int RageFile::PutLine(const RString&) { return -1; }
+int RageFile::PutLine(const RString& s) { return m_File ? m_File->PutLine(s) : -1; }
 void RageFile::EnableCRC32(bool on) { if (m_File) m_File->EnableCRC32(on); }
 bool RageFile::GetCRC32(uint32_t* out) { return m_File && m_File->GetCRC32(out); }
 int RageFile::Read(void* buffer, size_t bytes) { return m_File ? m_File->Read(buffer, bytes) : -1; }
@@ -530,9 +623,11 @@ int RageFile::Read(RString& buffer, int bytes) { return m_File ? m_File->Read(bu
 int RageFile::Read(void* buffer, size_t bytes, int nmemb) {
 	return m_File ? m_File->Read(buffer, bytes, nmemb) : -1;
 }
-int RageFile::Write(const void*, size_t) { return -1; }
-int RageFile::Write(const void*, size_t, int) { return -1; }
-int RageFile::Flush() { return 0; }
+int RageFile::Write(const void* buffer, size_t bytes) { return m_File ? m_File->Write(buffer, bytes) : -1; }
+int RageFile::Write(const void* buffer, size_t bytes, int nmemb) {
+	return m_File ? m_File->Write(buffer, bytes, nmemb) : -1;
+}
+int RageFile::Flush() { return m_File ? m_File->Flush() : -1; }
 int RageFile::Seek(int offset) { return m_File ? m_File->Seek(offset) : -1; }
 int RageFile::Seek(int offset, int whence) { return m_File ? m_File->Seek(offset, whence) : -1; }
 int RageFile::Tell() const { return m_File ? m_File->Tell() : -1; }
@@ -590,9 +685,15 @@ void RageFileManager::GetDirListingWithMultipleExtensions(
 }
 bool RageFileManager::Move(const RString&, const RString&) { return false; }
 bool RageFileManager::Copy(const std::string&, const std::string&) { return false; }
-bool RageFileManager::Remove(const RString&) { return false; }
+bool RageFileManager::Remove(const RString& path) {
+	std::error_code ec;
+	return std::filesystem::remove(path.c_str(), ec);
+}
 bool RageFileManager::DeleteRecursive(const RString&) { return false; }
-void RageFileManager::CreateDir(const RString&) {}
+void RageFileManager::CreateDir(const RString& path) {
+	std::error_code ec;
+	std::filesystem::create_directories(path.c_str(), ec);
+}
 RageFileManager::FileType RageFileManager::GetFileType(const RString& path) {
 	std::error_code ec;
 	auto status = std::filesystem::status(path.c_str(), ec);
@@ -971,14 +1072,21 @@ Steps::~Steps() = default;
 // ---------------------------------------------------------------------------
 // Song stubs sufficient for parsing
 Song::Song()
-	: m_SelectionDisplay(SHOW_ALWAYS),
-	  m_fMusicSampleStartSeconds(0.0f),
-	  m_fMusicSampleLengthSeconds(0.0f),
-	  m_DisplayBPMType(DISPLAY_BPM_ACTUAL),
-	  m_fSpecifiedBPMMin(0.0f),
-	  m_fSpecifiedBPMMax(0.0f)
+		: m_SelectionDisplay(SHOW_ALWAYS),
+		  m_fMusicSampleStartSeconds(0.0f),
+		  m_fMusicSampleLengthSeconds(0.0f),
+		  m_DisplayBPMType(DISPLAY_BPM_ACTUAL),
+		  m_fSpecifiedBPMMin(0.0f),
+		  m_fSpecifiedBPMMax(0.0f),
+		  firstSecond(-1.0f),
+		  lastSecond(-1.0f),
+		  specifiedLastSecond(-1.0f)
 {
-	for (auto& vec : m_vpStepsByType) vec.clear();
+		for (auto& changes : m_BackgroundChanges) {
+			changes = AutoPtrCopyOnWrite<VBackgroundChange>(new VBackgroundChange);
+		}
+		m_ForegroundChanges = AutoPtrCopyOnWrite<VBackgroundChange>(new VBackgroundChange);
+		for (auto& vec : m_vpStepsByType) vec.clear();
 }
 Song::~Song() { DetachSteps(); }
 void Song::Reset() { DetachSteps(); }
@@ -995,8 +1103,12 @@ bool Song::LoadAutosaveFile() { return false; }
 void Song::TidyUpData(bool, bool) {}
 void Song::ReCalculateStepStatsAndLastSecond(bool, bool) {}
 void Song::TranslateTitles() {}
-void Song::AddBackgroundChange(BackgroundLayer, BackgroundChange) {}
-void Song::AddForegroundChange(BackgroundChange) {}
+void Song::AddBackgroundChange(BackgroundLayer layer, BackgroundChange seg) {
+	BackgroundUtil::AddBackgroundChange(GetBackgroundChanges(layer), seg);
+}
+void Song::AddForegroundChange(BackgroundChange seg) {
+	BackgroundUtil::AddBackgroundChange(GetForegroundChanges(), seg);
+}
 bool Song::HasSignificantBpmChangesOrStops() const { return false; }
 void Song::GetDisplayBpms(DisplayBpms& bpms) const { bpms.Add(m_fSpecifiedBPMMin); bpms.Add(m_fSpecifiedBPMMax); }
 RString Song::GetDisplayMainTitle() const { return m_sMainTitleTranslit.empty() ? m_sMainTitle : m_sMainTitleTranslit; }
@@ -1016,21 +1128,40 @@ void Song::AddSteps(Steps* steps) {
 		m_vpStepsByType[steps->m_StepsType].push_back(steps);
 	}
 }
-const std::vector<BackgroundChange>& Song::GetBackgroundChanges(BackgroundLayer) const {
-	static std::vector<BackgroundChange> empty;
-	return empty;
+const std::vector<BackgroundChange>& Song::GetBackgroundChanges(BackgroundLayer bl) const {
+	return *m_BackgroundChanges[bl];
 }
-std::vector<BackgroundChange>& Song::GetBackgroundChanges(BackgroundLayer) {
-	static std::vector<BackgroundChange> empty;
-	return empty;
+std::vector<BackgroundChange>& Song::GetBackgroundChanges(BackgroundLayer bl) {
+	return *m_BackgroundChanges[bl].Get();
 }
-float Song::GetLastBeat() const { return 0.0f; }
+const std::vector<BackgroundChange>& Song::GetForegroundChanges() const { return *m_ForegroundChanges; }
+std::vector<BackgroundChange>& Song::GetForegroundChanges() { return *m_ForegroundChanges.Get(); }
+float Song::GetFirstSecond() const { return firstSecond; }
+float Song::GetLastBeat() const { return m_SongTiming.GetBeatFromElapsedTime(lastSecond); }
+float Song::GetLastSecond() const { return lastSecond; }
+float Song::GetSpecifiedLastBeat() const { return m_SongTiming.GetBeatFromElapsedTime(specifiedLastSecond); }
+float Song::GetSpecifiedLastSecond() const { return specifiedLastSecond; }
 RString Song::GetBackgroundPath() const { return ""; }
-void Song::SetSpecifiedLastSecond(const float) {}
-void Song::SetFirstSecond(const float) {}
-void Song::SetLastSecond(const float) {}
+void Song::SetSpecifiedLastSecond(const float f) { specifiedLastSecond = f; }
+void Song::SetFirstSecond(const float f) { firstSecond = f; }
+void Song::SetLastSecond(const float f) { lastSecond = f; }
 int Song::GetNumStepsLoadedFromProfile(ProfileSlot) const { return 0; }
 bool Song::IsEditAlreadyLoaded(Steps*) const { return false; }
+std::string Song::GetTranslitFullTitle() const {
+	std::string title = GetTranslitMainTitle();
+	std::string subtitle = GetTranslitSubTitle();
+	if (!subtitle.empty()) title += " " + subtitle;
+	return title;
+}
+std::vector<std::string> Song::GetInstrumentTracksToVectorString() const {
+	std::vector<std::string> out;
+	FOREACH_ENUM(InstrumentTrack, it) {
+		if (!m_sInstrumentTrackFile[it].empty()) {
+			out.push_back(InstrumentTrackToString(it) + "=" + m_sInstrumentTrackFile[it]);
+		}
+	}
+	return out;
+}
 
 // ---------------------------------------------------------------------------
 // ScreenMessage helpers
@@ -1098,8 +1229,15 @@ void XNodeStringValue::SetValueFromStack(lua_State* L) {
 }
 
 namespace BackgroundUtil {
-void AddBackgroundChange(std::vector<BackgroundChange>&, BackgroundChange) {}
-void SortBackgroundChangesArray(std::vector<BackgroundChange>&) {}
+void AddBackgroundChange(std::vector<BackgroundChange>& changes, BackgroundChange change) {
+	changes.push_back(std::move(change));
+	SortBackgroundChangesArray(changes);
+}
+void SortBackgroundChangesArray(std::vector<BackgroundChange>& changes) {
+	std::sort(changes.begin(), changes.end(), [](const BackgroundChange& a, const BackgroundChange& b) {
+		return a.m_fStartBeat < b.m_fStartBeat;
+	});
+}
 void GetBackgroundEffects(const RString&, std::vector<RString>& paths, std::vector<RString>& names) { paths.clear(); names.clear(); }
 void GetBackgroundTransitions(const RString&, std::vector<RString>& paths, std::vector<RString>& names) { paths.clear(); names.clear(); }
 void GetSongBGAnimations(const Song*, const RString&, std::vector<RString>& paths, std::vector<RString>& names) { paths.clear(); names.clear(); }
@@ -1108,6 +1246,27 @@ void GetSongBitmaps(const Song*, const RString&, std::vector<RString>& paths, st
 void GetGlobalBGAnimations(const Song*, const RString&, std::vector<RString>& paths, std::vector<RString>& names) { paths.clear(); names.clear(); }
 void GetGlobalRandomMovies(const Song*, const RString&, std::vector<RString>& paths, std::vector<RString>& names, bool, bool) { paths.clear(); names.clear(); }
 void BakeAllBackgroundChanges(Song*) {}
+}
+
+std::string BackgroundChange::ToString() const {
+	return ssprintf(
+		"%.3f=%s=%.3f=%d=%d=%d=%s=%s=%s=%s=%s",
+		m_fStartBeat,
+		SmEscape(m_def.m_sFile1).c_str(),
+		m_fRate,
+		m_sTransition == SBT_CrossFade,
+		m_def.m_sEffect == SBE_StretchRewind,
+		m_def.m_sEffect != SBE_StretchNoLoop,
+		m_def.m_sEffect.c_str(),
+		m_def.m_sFile2.c_str(),
+		m_sTransition.c_str(),
+		SmEscape(RageColor::NormalizeColorString(m_def.m_sColor1)).c_str(),
+		SmEscape(RageColor::NormalizeColorString(m_def.m_sColor2)).c_str());
+}
+
+const std::string& ProfileManager::GetProfileDir(ProfileSlot) const {
+	static const std::string empty;
+	return empty;
 }
 
 XNode::XNode() : m_sName("") {}
