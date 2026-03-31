@@ -7,7 +7,9 @@ extern "C" {
 #include "itgmania_adapter.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <cmath>
@@ -48,9 +50,12 @@ extern "C" {
 #include "NotesLoader.h"
 #include "NotesLoaderSM.h"
 #include "NotesLoaderSSC.h"
+#include "NotesWriterSM.h"
+#include "NotesWriterSSC.h"
 #include "NoteTypes.h"
 #include "PrefsManager.h"
 #include "RadarValues.h"
+#include "RageFileBasic.h"
 #include "RageFileManager.h"
 #include "RageLog.h"
 #include "RageUtil.h"
@@ -385,17 +390,137 @@ static void compute_display_metadata(
     artist_out = artist;
 }
 
-static std::string bpm_string_from_timing(TimingData* td) {
-    const std::vector<TimingSegment*>& segments = td->GetTimingSegments(SEGMENT_BPM);
-    std::vector<RString> bpm_strings;
-    bpm_strings.reserve(segments.size());
-    for (TimingSegment* segment : segments) {
-        const BPMSegment* bpm_segment = ToBPM(segment);
-        const float beat = bpm_segment->GetBeat();
-        const float bpm = bpm_segment->GetBPM();
-        bpm_strings.push_back(ssprintf("%s=%s", NormalizeDecimal(beat).c_str(), NormalizeDecimal(bpm).c_str()));
+class MemoryRageFile final : public RageFileBasic {
+  public:
+    MemoryRageFile() = default;
+    MemoryRageFile(const MemoryRageFile&) = default;
+
+    const std::string& contents() const { return contents_; }
+
+    std::string GetError() const override { return error_; }
+    void ClearError() override { error_.clear(); }
+    bool AtEOF() const override { return position_ >= static_cast<int>(contents_.size()); }
+
+    int Seek(int iOffset) override { return Seek(iOffset, SEEK_SET); }
+    int Seek(int offset, int whence) override {
+        long long next = 0;
+        switch (whence) {
+            case SEEK_SET: next = offset; break;
+            case SEEK_CUR: next = static_cast<long long>(position_) + offset; break;
+            case SEEK_END: next = static_cast<long long>(contents_.size()) + offset; break;
+            default:
+                error_ = "invalid whence";
+                return -1;
+        }
+        if (next < 0) next = 0;
+        const size_t size = contents_.size();
+        if (static_cast<size_t>(next) > size) next = static_cast<long long>(size);
+        position_ = static_cast<int>(next);
+        return position_;
     }
-    return join(",", bpm_strings);
+    int Tell() const override { return position_; }
+
+    int Read(void* pBuffer, size_t iBytes) override {
+        if (!pBuffer) return -1;
+        const size_t avail = contents_.size() - static_cast<size_t>(std::min(position_, static_cast<int>(contents_.size())));
+        const size_t count = std::min(iBytes, avail);
+        if (count == 0) return 0;
+        std::memcpy(pBuffer, contents_.data() + position_, count);
+        position_ += static_cast<int>(count);
+        return static_cast<int>(count);
+    }
+    int Read(std::string& buffer, int bytes = -1) override {
+        const size_t avail = contents_.size() - static_cast<size_t>(std::min(position_, static_cast<int>(contents_.size())));
+        const size_t count = (bytes < 0) ? avail : std::min(static_cast<size_t>(bytes), avail);
+        buffer.assign(contents_.data() + position_, count);
+        position_ += static_cast<int>(count);
+        return static_cast<int>(count);
+    }
+    int Read(void* buffer, size_t bytes, int nmemb) override {
+        const size_t total = bytes * static_cast<size_t>(nmemb);
+        const int read = Read(buffer, total);
+        if (read < 0 || bytes == 0) return read;
+        return read / static_cast<int>(bytes);
+    }
+
+    int Write(const void* pBuffer, size_t iBytes) override {
+        if (!pBuffer) return -1;
+        if (position_ < 0) {
+            error_ = "invalid write position";
+            return -1;
+        }
+        const size_t pos = static_cast<size_t>(position_);
+        if (pos > contents_.size()) {
+            contents_.resize(pos, '\0');
+        }
+        if (pos == contents_.size()) {
+            contents_.append(static_cast<const char*>(pBuffer), iBytes);
+        } else {
+            if (pos + iBytes > contents_.size()) {
+                contents_.resize(pos + iBytes);
+            }
+            std::memcpy(contents_.data() + pos, pBuffer, iBytes);
+        }
+        position_ += static_cast<int>(iBytes);
+        return 0;
+    }
+    int Write(const std::string& sString) override {
+        return Write(sString.data(), sString.size());
+    }
+    int Write(const void* buffer, size_t bytes, int nmemb) override {
+        const size_t total = bytes * static_cast<size_t>(nmemb);
+        return Write(buffer, total);
+    }
+
+    int Flush() override { return 0; }
+    RageFileBasic* Copy() const override { return new MemoryRageFile(*this); }
+
+    int GetLine(std::string& out) override {
+        out.clear();
+        if (AtEOF()) return 0;
+        const size_t start = static_cast<size_t>(position_);
+        const size_t nl = contents_.find('\n', start);
+        const size_t end = (nl == std::string::npos) ? contents_.size() : nl;
+        out.assign(contents_.data() + start, end - start);
+        if (!out.empty() && out.back() == '\r') out.pop_back();
+        position_ = (nl == std::string::npos) ? static_cast<int>(contents_.size()) : static_cast<int>(nl + 1);
+        return 1;
+    }
+    int PutLine(const std::string& str) override {
+        if (Write(str) == -1) return -1;
+        return Write("\r\n", 2);
+    }
+
+    void EnableCRC32(bool /*on*/ = true) override {}
+    bool GetCRC32(uint32_t* iRet) override {
+        if (iRet) *iRet = 0;
+        return false;
+    }
+
+    int GetFileSize() const override { return static_cast<int>(contents_.size()); }
+    int GetFD() override { return -1; }
+
+  private:
+    std::string contents_;
+    std::string error_;
+    int position_ = 0;
+};
+
+struct SerializedChartSource {
+    std::string simfile_string;
+    std::string file_type;
+
+    bool empty() const {
+        return simfile_string.empty() || file_type.empty();
+    }
+};
+
+static std::string normalize_simfile_file_type(std::string_view simfile_path) {
+    RString ext = GetExtension(std::string(simfile_path));
+    MakeLower(ext);
+    if (ext == "ssc" || ext == "ats") return "ssc";
+    if (ext == "sm" || ext == "sma") return "sm";
+    return {};
 }
 
 static std::vector<std::vector<double>> timing_segments_to_number_table(TimingData* td, TimingSegmentType tst) {
@@ -411,6 +536,66 @@ static std::vector<std::vector<double>> timing_segments_to_number_table(TimingDa
         out.push_back(std::move(row));
     }
     return out;
+}
+
+static bool serialize_chart_with_itgmania(const std::string& simfile_path,
+                                          Song& song,
+                                          Steps* steps,
+                                          SerializedChartSource* out) {
+    if (!steps || !out) return false;
+    out->simfile_string.clear();
+    out->file_type = normalize_simfile_file_type(simfile_path);
+    if (out->file_type.empty()) return false;
+
+    MemoryRageFile file;
+    std::vector<Steps*> steps_to_save{steps};
+    bool ok = false;
+    if (out->file_type == "sm") {
+        ok = NotesWriterSM::Write(file, song, steps_to_save);
+        if (ok) {
+            out->simfile_string = file.contents();
+        }
+    } else if (out->file_type == "ssc") {
+        static std::atomic<unsigned long long> counter{0};
+        std::error_code ec;
+        const auto stamp = std::chrono::high_resolution_clock::now().time_since_epoch().count();
+        const unsigned long long suffix = counter.fetch_add(1, std::memory_order_relaxed);
+        std::vector<std::filesystem::path> temp_dirs;
+        std::filesystem::path temp_dir = std::filesystem::temp_directory_path(ec);
+        if (!ec && !temp_dir.empty()) {
+            temp_dirs.push_back(temp_dir);
+        }
+        ec.clear();
+        temp_dir = std::filesystem::current_path(ec);
+        if (!ec && !temp_dir.empty()) {
+            temp_dirs.push_back(temp_dir);
+        }
+
+        for (const auto& dir : temp_dirs) {
+            const std::filesystem::path temp_path =
+                dir / ssprintf("itgmania-reference-harness-%lld-%llu.ssc",
+                               static_cast<long long>(stamp), suffix);
+            ok = NotesWriterSSC::Write(temp_path.string(), song, steps_to_save, false);
+            if (ok) {
+                std::ifstream in(temp_path, std::ios::binary);
+                if (!in) {
+                    ok = false;
+                } else {
+                    std::ostringstream buffer;
+                    buffer << in.rdbuf();
+                    out->simfile_string = buffer.str();
+                }
+            }
+            std::filesystem::remove(temp_path, ec);
+            if (ok && !out->simfile_string.empty()) break;
+        }
+    }
+    if (!ok) {
+        out->simfile_string.clear();
+        out->file_type.clear();
+        return false;
+    }
+    return !out->simfile_string.empty();
 }
 
 static std::vector<TimingLabelOut> timing_labels_to_table(TimingData* td) {
@@ -488,18 +673,11 @@ static bool load_song(const std::string& simfile_path, Song& song) {
     return false;
 }
 
-static std::string raw_bpms_from_msd(const std::string& simfile_path,
+static std::string raw_bpms_from_msd(const MsdFile& msd,
+                                     const std::string& file_type,
                                      const std::string& steps_type,
                                      const std::string& difficulty,
                                      const std::string& description) {
-    MsdFile msd;
-    if (!msd.ReadFile(simfile_path, true)) {
-        return {};
-    }
-
-    RString ext = GetExtension(simfile_path);
-    MakeLower(ext);
-
     auto normalize_steps = [&](const RString& value) -> std::string {
         RString out = value;
         Trim(out);
@@ -516,7 +694,7 @@ static std::string raw_bpms_from_msd(const std::string& simfile_path,
         return out.c_str();
     };
 
-    if (ext != "ssc" && ext != "ats") {
+    if (file_type != "ssc") {
         const unsigned values = msd.GetNumValues();
         for (unsigned i = 0; i < values; ++i) {
             const MsdFile::value_t& params = msd.GetValue(i);
@@ -587,51 +765,26 @@ static std::string raw_bpms_from_msd(const std::string& simfile_path,
     return {};
 }
 
-struct FallbackBpmOverride {
-    std::string bpms;
-};
-
-static int lua_normalize_float_digits_override(lua_State* L) {
-    auto* ov = static_cast<FallbackBpmOverride*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (!ov) {
-        lua_pushstring(L, "");
-        return 1;
+static std::string raw_bpms_from_msd_file(const std::string& simfile_path,
+                                          const std::string& steps_type,
+                                          const std::string& difficulty,
+                                          const std::string& description) {
+    MsdFile msd;
+    if (!msd.ReadFile(simfile_path, true)) {
+        return {};
     }
-    lua_pushlstring(L, ov->bpms.data(), ov->bpms.size());
-    return 1;
+    return raw_bpms_from_msd(msd, normalize_simfile_file_type(simfile_path), steps_type, difficulty, description);
 }
 
-static bool install_normalize_bpms_override(lua_State* L, FallbackBpmOverride* ov) {
-    lua_getglobal(L, "ParseChartInfo");
-    if (!lua_isfunction(L, -1)) {
-        lua_pop(L, 1);
-        return false;
-    }
-    bool replaced = false;
-    for (int i = 1;; ++i) {
-        const char* upname = lua_getupvalue(L, -1, i);
-        if (!upname) break;
-        if (std::string_view(upname) == "GetSimfileChartString") {
-            for (int j = 1;; ++j) {
-                const char* inner = lua_getupvalue(L, -1, j);
-                if (!inner) break;
-                if (std::string_view(inner) == "NormalizeFloatDigits") {
-                    lua_pop(L, 1);
-                    lua_pushlightuserdata(L, ov);
-                    lua_pushcclosure(L, lua_normalize_float_digits_override, 1);
-                    lua_setupvalue(L, -2, j);
-                    replaced = true;
-                    break;
-                }
-                lua_pop(L, 1);
-            }
-            lua_pop(L, 1);
-            break;
-        }
-        lua_pop(L, 1);
-    }
-    lua_pop(L, 1);
-    return replaced;
+static std::string raw_bpms_from_msd_string(const std::string& simfile_string,
+                                            const std::string& file_type,
+                                            const std::string& steps_type,
+                                            const std::string& difficulty,
+                                            const std::string& description) {
+    if (simfile_string.empty() || file_type.empty()) return {};
+    MsdFile msd;
+    msd.ReadFromString(simfile_string, true);
+    return raw_bpms_from_msd(msd, file_type, steps_type, difficulty, description);
 }
 
 // ---------------------------------------------------------------------------
@@ -813,14 +966,15 @@ static int lua_ivalues(lua_State* L) {
     return 1;
 }
 
-static bool extract_sl_hash_bpms(lua_State* L,
-                                 LuaStepsCtx* ctx,
-                                 const std::string& steps_type,
-                                 const std::string& difficulty,
-                                 const std::string& description,
-                                 std::string* out_hash_bpms) {
-    if (!out_hash_bpms) return false;
-    out_hash_bpms->clear();
+static bool extract_sl_chart_data(lua_State* L,
+                                  LuaStepsCtx* ctx,
+                                  const std::string& steps_type,
+                                  const std::string& difficulty,
+                                  const std::string& description,
+                                  std::string* out_chart_string,
+                                  std::string* out_hash_bpms) {
+    if (out_chart_string) out_chart_string->clear();
+    if (out_hash_bpms) out_hash_bpms->clear();
 
     const int top = lua_gettop(L);
 
@@ -893,41 +1047,16 @@ static bool extract_sl_hash_bpms(lua_State* L,
         return false;
     }
 
-    if (lua_isstring(L, -1)) {
+    if (out_hash_bpms && lua_isstring(L, -1)) {
         *out_hash_bpms = lua_tostring(L, -1) ? lua_tostring(L, -1) : "";
+    }
+    if (out_chart_string && lua_isstring(L, -2)) {
+        *out_chart_string = lua_tostring(L, -2) ? lua_tostring(L, -2) : "";
     }
     lua_pop(L, 2);
 
     cleanup();
-    return !out_hash_bpms->empty();
-}
-
-static std::string build_ssc_stub_simfile(std::string_view steps_type,
-                                          std::string_view description,
-                                          std::string_view difficulty,
-                                          int meter,
-                                          std::string_view bpms,
-                                          std::string_view note_data) {
-    std::string out;
-    out.reserve(bpms.size() + note_data.size() + steps_type.size() + description.size() + difficulty.size() + 160);
-    out.append("#BPMS:");
-    out.append(bpms);
-    out.append(";\n#NOTEDATA:\n");
-    out.append("#STEPSTYPE:");
-    out.append(steps_type);
-    out.append(";\n#DESCRIPTION:");
-    out.append(description);
-    out.append(";\n#DIFFICULTY:");
-    out.append(difficulty);
-    out.append(";\n#METER:");
-    out.append(std::to_string(meter));
-    out.append(";\n#NOTES:\n");
-    out.append(note_data);
-    if (note_data.empty() || note_data.back() != '\n') {
-        out.push_back('\n');
-    }
-    out.append(";\n");
-    return out;
+    return out_chart_string ? !out_chart_string->empty() : (out_hash_bpms && !out_hash_bpms->empty());
 }
 
 struct FallbackSimfileOverride {
@@ -1113,52 +1242,15 @@ static std::string compute_sl_hash(lua_State* L, std::string_view chart_string, 
     return out;
 }
 
-static std::string fallback_hash_from_notes(lua_State* L,
-                                            const Steps* steps,
-                                            const std::string& steps_type,
-                                            const std::string& difficulty,
-                                            const std::string& description,
-                                            const std::string& hash_bpms) {
-    if (!L || !steps || hash_bpms.empty()) return "";
-
-    RString note_data_raw;
-    steps->GetSMNoteData(note_data_raw);
-    if (note_data_raw.empty()) return "";
-
-    const std::string simfile_stub =
-        build_ssc_stub_simfile(steps_type, description, difficulty, steps->GetMeter(), hash_bpms,
-                               std::string_view(note_data_raw.data(), note_data_raw.size()));
-
-    const int chart_ref = get_simfile_chart_string_ref(L);
-    if (chart_ref == LUA_NOREF) return "";
-
-    std::string chart_string;
-    (void)call_get_simfile_chart_string(L, chart_ref, simfile_stub, steps_type, difficulty, description, "ssc",
-                                        &chart_string, nullptr);
-    luaL_unref(L, LUA_REGISTRYINDEX, chart_ref);
-
-    if (chart_string.empty()) return "";
-    return compute_sl_hash(L, chart_string, hash_bpms);
-}
-
-static bool fallback_parse_from_notes(lua_State* L,
-                                      LuaStepsCtx* ctx,
-                                      const Steps* steps,
-                                      const std::string& steps_type,
-                                      const std::string& difficulty,
-                                      const std::string& description,
-                                      const std::string& hash_bpms) {
-    if (!L || !ctx || !steps || hash_bpms.empty()) return false;
-
-    RString note_data_raw;
-    steps->GetSMNoteData(note_data_raw);
-    if (note_data_raw.empty()) return false;
+static bool parse_chartinfo_from_simfile_string(lua_State* L,
+                                                LuaStepsCtx* ctx,
+                                                const std::string& simfile_string,
+                                                const std::string& file_type) {
+    if (!L || !ctx || simfile_string.empty() || file_type.empty()) return false;
 
     FallbackSimfileOverride simfile_override;
-    simfile_override.simfile_string = build_ssc_stub_simfile(
-        steps_type, description, difficulty, steps->GetMeter(), hash_bpms,
-        std::string_view(note_data_raw.data(), note_data_raw.size()));
-    simfile_override.file_type = "ssc";
+    simfile_override.simfile_string = simfile_string;
+    simfile_override.file_type = file_type;
 
     const ParseUpvalueOverride upvalue = install_parsechartinfo_upvalue_override(
         L, "GetSimfileString", lua_get_simfile_string_override, &simfile_override);
@@ -1191,9 +1283,9 @@ static std::string compute_hash_with_lua(const std::string& simfile_path,
                                          const std::string& steps_type,
                                          const std::string& difficulty,
                                          const std::string& description,
-                                         const Steps* steps,
                                          TimingData* timing,
                                          bool force_steps_parse,
+                                         const SerializedChartSource* serialized_source,
                                          std::string* out_hash_bpms,
                                          std::string* breakdown_text,
                                          std::vector<std::string>* breakdown_levels,
@@ -1260,32 +1352,40 @@ static std::string compute_hash_with_lua(const std::string& simfile_path,
     }
 
     LuaStepsCtx ctx{simfile_path, steps_type, difficulty, description, timing};
-    const bool allow_force_parse = force_steps_parse && steps && out_hash_bpms;
-    if (allow_force_parse && out_hash_bpms) {
-        out_hash_bpms->clear();
+    if (out_hash_bpms) out_hash_bpms->clear();
+
+    const bool have_serialized_source = serialized_source && !serialized_source->empty();
+    const bool allow_force_parse = force_steps_parse && have_serialized_source;
+    const int chart_ref = get_simfile_chart_string_ref(L);
+
+    std::string chart_string;
+    bool have_chart_data = false;
+    if (!allow_force_parse) {
+        have_chart_data = extract_sl_chart_data(
+            L, &ctx, steps_type, difficulty, description, &chart_string, out_hash_bpms);
     }
-    const bool has_hash_bpms = !allow_force_parse
-        && extract_sl_hash_bpms(L, &ctx, steps_type, difficulty, description, out_hash_bpms);
-    FallbackBpmOverride bpm_override;
-    if (!has_hash_bpms) {
-        std::string fallback_bpms;
-        if (timing) {
-            fallback_bpms = bpm_string_from_timing(timing);
-        }
-        if (fallback_bpms.empty()) {
-            fallback_bpms = raw_bpms_from_msd(simfile_path, steps_type, difficulty, description);
-        }
-        if (!fallback_bpms.empty()) {
-            if (out_hash_bpms) {
-                *out_hash_bpms = fallback_bpms;
-            }
-            bpm_override.bpms = fallback_bpms;
-            install_normalize_bpms_override(L, &bpm_override);
-        }
+    if ((!have_chart_data || (out_hash_bpms && out_hash_bpms->empty()))
+        && have_serialized_source
+        && chart_ref != LUA_NOREF) {
+        have_chart_data = call_get_simfile_chart_string(
+            L,
+            chart_ref,
+            serialized_source->simfile_string,
+            steps_type,
+            difficulty,
+            description,
+            serialized_source->file_type,
+            &chart_string,
+            out_hash_bpms);
     }
+    if (chart_ref != LUA_NOREF) {
+        luaL_unref(L, LUA_REGISTRYINDEX, chart_ref);
+    }
+
     bool parsed = false;
-    if (allow_force_parse && out_hash_bpms && !out_hash_bpms->empty()) {
-        parsed = fallback_parse_from_notes(L, &ctx, steps, steps_type, difficulty, description, *out_hash_bpms);
+    if (allow_force_parse) {
+        parsed = parse_chartinfo_from_simfile_string(
+            L, &ctx, serialized_source->simfile_string, serialized_source->file_type);
     }
     if (!parsed) {
         // Push an error handler to capture Lua stack traces.
@@ -1299,8 +1399,16 @@ static std::string compute_hash_with_lua(const std::string& simfile_path,
         lua_pushstring(L, "P1");
         if (lua_pcall(L, 2, 0, errfunc) != 0) {
             lua_pop(L, 1);
-            lua_close(L);
-            return "";
+            if (have_serialized_source
+                && parse_chartinfo_from_simfile_string(
+                    L, &ctx, serialized_source->simfile_string, serialized_source->file_type)) {
+                parsed = true;
+            } else {
+                lua_close(L);
+                return "";
+            }
+        } else {
+            parsed = true;
         }
         lua_pop(L, 1); // pop traceback handler
     }
@@ -1311,21 +1419,18 @@ static std::string compute_hash_with_lua(const std::string& simfile_path,
     lua_getfield(L, -1, "Hash");
     std::string result = lua_tostring(L, -1) ? lua_tostring(L, -1) : "";
     lua_pop(L, 1);
-    if (result.empty() && steps && out_hash_bpms && !out_hash_bpms->empty()) {
-        // Fallback: re-run SL parser with ITGmania note data to populate streams/hashes.
-        if (!allow_force_parse) {
-            if (fallback_parse_from_notes(L, &ctx, steps, steps_type, difficulty, description, *out_hash_bpms)) {
-                lua_getfield(L, -1, "Hash");
-                result = lua_tostring(L, -1) ? lua_tostring(L, -1) : "";
-                lua_pop(L, 1);
-            }
+    if (result.empty() && !allow_force_parse && have_serialized_source) {
+        if (parse_chartinfo_from_simfile_string(
+                L, &ctx, serialized_source->simfile_string, serialized_source->file_type)) {
+            lua_getfield(L, -1, "Hash");
+            result = lua_tostring(L, -1) ? lua_tostring(L, -1) : "";
+            lua_pop(L, 1);
         }
-        if (result.empty()) {
-            const std::string fallback = fallback_hash_from_notes(
-                L, steps, steps_type, difficulty, description, *out_hash_bpms);
-            if (!fallback.empty()) {
-                result = fallback;
-            }
+    }
+    if (result.empty() && out_hash_bpms && !out_hash_bpms->empty() && !chart_string.empty()) {
+        const std::string fallback = compute_sl_hash(L, chart_string, *out_hash_bpms);
+        if (!fallback.empty()) {
+            result = fallback;
         }
     }
 
@@ -1572,7 +1677,7 @@ static void fill_tech_counts(ChartMetrics& out, const TechCounts& tech) {
     out.tech.doublesteps = static_cast<int>(tech[TechCountsCategory_Doublesteps]);
 }
 
-static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Steps* steps, const Song& song,
+static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Steps* steps, Song& song,
                                             bool force_steps_parse) {
     TimingData* const td = steps->GetTimingData();
     td->TidyUpData(false);
@@ -1607,8 +1712,21 @@ static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Ste
     int stream_measures = 0;
     int break_measures = 0;
     std::vector<StreamSequenceOut> stream_sequences;
-    out.hash = compute_hash_with_lua(simfile_path, st_str, diff_str, steps->GetDescription(), steps, td,
+    SerializedChartSource serialized_source;
+    if (serialize_chart_with_itgmania(simfile_path, song, steps, &serialized_source)) {
+        out.bpms = raw_bpms_from_msd_string(
+            serialized_source.simfile_string,
+            serialized_source.file_type,
+            st_str,
+            diff_str,
+            steps->GetDescription());
+    }
+    if (out.bpms.empty()) {
+        out.bpms = raw_bpms_from_msd_file(simfile_path, st_str, diff_str, steps->GetDescription());
+    }
+    out.hash = compute_hash_with_lua(simfile_path, st_str, diff_str, steps->GetDescription(), td,
                                      force_steps_parse,
+                                     &serialized_source,
                                      &out.hash_bpms,
                                      &out.streams_breakdown, &breakdown_levels, &stream_measures, &break_measures,
                                      &stream_sequences,
@@ -1616,7 +1734,6 @@ static ChartMetrics build_metrics_for_steps(const std::string& simfile_path, Ste
     out.steps_type = st_str;
     out.difficulty = diff_str;
     out.meter = steps->GetMeter();
-    out.bpms = bpm_string_from_timing(td);
     get_bpm_ranges_like_simply_love(steps, 1.0, out.bpm_min, out.bpm_max, out.display_bpm_min, out.display_bpm_max,
                                    out.display_bpm);
 
