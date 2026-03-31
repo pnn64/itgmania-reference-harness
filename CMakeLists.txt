@@ -270,7 +270,6 @@ if(USE_ITGMANIA_PREBUILT)
 elseif(USE_ITGMANIA_SOURCES)
   # Minimal subset of ITGmania sources needed for simfile parsing and tech counting.
   set(ITGMANIA_SOURCES
-    ${ITGMANIA_ROOT}/src/StdString.cpp
     ${ITGMANIA_ROOT}/src/RageUtil.cpp
     ${ITGMANIA_ROOT}/src/RageException.cpp
     ${ITGMANIA_ROOT}/src/RageThreads.cpp

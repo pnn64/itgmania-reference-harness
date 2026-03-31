@@ -24,9 +24,12 @@
 #include "NotesLoaderSSC.h"
 #include "RageUtil.h"
 #include "Song.h"
+#include "StdString.h"
 #include "Steps.h"
 #include "StepParityGenerator.h"
 #include "TimingData.h"
+
+using RString = std::string;
 
 static bool steps_supports_itgmania_notedata(const Steps* steps) {
     if (!steps || !GAMEMAN) return false;
@@ -130,6 +133,36 @@ static std::string format_foot_vec(const StepParity::FootPlacement& feet) {
     return out.str();
 }
 
+static StepParity::FootPlacement foot_placement_from_array(const StepParity::Foot* feet, int count) {
+    if (!feet || count <= 0) {
+        return {};
+    }
+    return StepParity::FootPlacement(feet, feet + count);
+}
+
+static StepParity::FootPlacement foot_placement_from_flags(
+    const StepParity::State* state,
+    int count,
+    const bool* flags) {
+    if (!state || !flags || count <= 0) {
+        return {};
+    }
+
+    StepParity::FootPlacement out(static_cast<size_t>(count), StepParity::NONE);
+    for (int i = 0; i < count; ++i) {
+        const StepParity::Foot foot = state->combinedColumns[i];
+        if (foot == StepParity::NONE) {
+            continue;
+        }
+
+        const size_t foot_idx = static_cast<size_t>(foot);
+        if (foot_idx < static_cast<size_t>(StepParity::NUM_Foot) && flags[foot_idx]) {
+            out[static_cast<size_t>(i)] = foot;
+        }
+    }
+    return out;
+}
+
 static int foot_position(const std::vector<int>& positions, StepParity::Foot foot) {
     const size_t idx = static_cast<size_t>(foot);
     if (idx >= positions.size()) {
@@ -178,6 +211,41 @@ static std::string format_foot_flags(const bool* flags, size_t size) {
         << " rh=" << flag_value(StepParity::RIGHT_HEEL)
         << " rt=" << flag_value(StepParity::RIGHT_TOE);
     return out.str();
+}
+
+static std::optional<StepParity::StageLayout> get_step_parity_layout(StepsType ty) {
+    switch (ty) {
+        case StepsType_dance_single:
+            return StepParity::StageLayout(
+                StepsType_dance_single,
+                {
+                    {0, 1},
+                    {1, 0},
+                    {1, 2},
+                    {2, 1},
+                },
+                {2},
+                {1},
+                {0, 3});
+        case StepsType_dance_double:
+            return StepParity::StageLayout(
+                StepsType_dance_double,
+                {
+                    {0, 1},
+                    {1, 0},
+                    {1, 2},
+                    {2, 1},
+                    {3, 1},
+                    {4, 0},
+                    {4, 2},
+                    {5, 1},
+                },
+                {2, 6},
+                {1, 5},
+                {0, 3, 4, 7});
+        default:
+            return std::nullopt;
+    }
 }
 
 struct IdentityHasher {
@@ -489,7 +557,8 @@ static bool emit_step_parity_path_dump(Steps* steps, std::ostream& out) {
         out << "STEP_PARITY_PATH error=missing_steps\n";
         return false;
     }
-    if (StepParity::Layouts.find(steps->m_StepsType) == StepParity::Layouts.end()) {
+    const std::optional<StepParity::StageLayout> layout = get_step_parity_layout(steps->m_StepsType);
+    if (!layout.has_value()) {
         out << "STEP_PARITY_PATH error=unsupported_steps_type\n";
         return false;
     }
@@ -500,8 +569,8 @@ static bool emit_step_parity_path_dump(Steps* steps, std::ostream& out) {
     NoteData note_data;
     steps->GetNoteData(note_data);
 
-    StepParity::StageLayout layout = StepParity::Layouts.at(steps->m_StepsType);
-    StepParity::StepParityGenerator gen(layout);
+    StepParity::StageLayout stage_layout = *layout;
+    StepParity::StepParityGenerator gen(&stage_layout, timing);
     if (!gen.analyzeNoteData(note_data)) {
         GAMESTATE->SetProcessedTimingData(nullptr);
         out << "STEP_PARITY_PATH error=analyze_failed\n";
@@ -515,38 +584,37 @@ static bool emit_step_parity_path_dump(Steps* steps, std::ostream& out) {
         << " start=0 end=" << end_id
         << "\n";
 
-    float total_cost = 0.0f;
     std::ios_base::fmtflags flags = out.flags();
     std::streamsize precision = out.precision();
     out << std::fixed << std::setprecision(6);
 
     for (size_t i = 0; i < gen.nodes_for_rows.size(); ++i) {
         const int node_id = gen.nodes_for_rows[i];
-        const int prev_id = (i == 0) ? 0 : gen.nodes_for_rows[i - 1];
-        StepParity::StepParityNode* prev_node = gen.nodes[prev_id];
         StepParity::StepParityNode* curr_node = gen.nodes[node_id];
-
-        float edge_cost = -1.0f;
-        auto it = prev_node->neighbors.find(curr_node);
-        if (it != prev_node->neighbors.end()) {
-            edge_cost = it->second;
-        }
-        total_cost += edge_cost;
+        const StepParity::StepParityNode* prev_node = curr_node ? curr_node->previousNode : nullptr;
+        const int prev_id = prev_node ? prev_node->id : -1;
+        const float edge_cost = prev_node ? (curr_node->totalCost - prev_node->totalCost) : -1.0f;
 
         const StepParity::Row& row = gen.rows[i];
         const StepParity::State* state = curr_node->state;
+        const StepParity::FootPlacement combined =
+            foot_placement_from_array(state->combinedColumns, row.columnCount);
+        const StepParity::FootPlacement moved =
+            foot_placement_from_flags(state, row.columnCount, state->didTheFootMove);
+        const StepParity::FootPlacement hold =
+            foot_placement_from_flags(state, row.columnCount, state->isTheFootHolding);
         out << "STEP_PARITY_PATH row_idx=" << i
             << " node=" << node_id
             << " prev=" << prev_id
             << " edge_cost=" << edge_cost
-            << " total_cost=" << total_cost
+            << " total_cost=" << curr_node->totalCost
             << " beat=" << row.beat
             << " second=" << row.second
             << " note_count=" << row.noteCount
-            << " columns=" << format_foot_vec(state->columns)
-            << " combined=" << format_foot_vec(state->combinedColumns)
-            << " moved=" << format_foot_vec(state->movedFeet)
-            << " hold=" << format_foot_vec(state->holdFeet)
+            << " columns=" << format_foot_vec(row.columns)
+            << " combined=" << format_foot_vec(combined)
+            << " moved=" << format_foot_vec(moved)
+            << " hold=" << format_foot_vec(hold)
             << " row_feet=" << format_foot_positions(row.whereTheFeetAre)
             << " state_feet=" << format_foot_positions(state->whereTheFeetAre, StepParity::NUM_Foot)
             << " moved_flags=" << format_foot_flags(state->didTheFootMove, StepParity::NUM_Foot)
@@ -556,19 +624,17 @@ static bool emit_step_parity_path_dump(Steps* steps, std::ostream& out) {
 
     const int last_id = gen.nodes_for_rows.empty() ? 0 : gen.nodes_for_rows.back();
     float end_cost = -1.0f;
+    float final_total_cost = 0.0f;
     if (node_count && !gen.nodes_for_rows.empty()) {
-        StepParity::StepParityNode* last_node = gen.nodes[last_id];
-        StepParity::StepParityNode* end_node = gen.nodes.back();
-        auto it = last_node->neighbors.find(end_node);
-        if (it != last_node->neighbors.end()) {
-            end_cost = it->second;
-        }
+        const StepParity::StepParityNode* last_node = gen.nodes[last_id];
+        const StepParity::StepParityNode* end_node = gen.nodes.back();
+        end_cost = end_node->totalCost - last_node->totalCost;
+        final_total_cost = end_node->totalCost;
     }
-    total_cost += end_cost;
     out << "STEP_PARITY_PATH end last_node=" << last_id
         << " end_node=" << end_id
         << " edge_cost=" << end_cost
-        << " total_cost=" << total_cost
+        << " total_cost=" << final_total_cost
         << "\n";
 
     out.flags(flags);
@@ -598,7 +664,8 @@ bool emit_step_parity_dump(
     song.m_sSongFileName = simfile_path;
     song.SetSongDir(Dirname(simfile_path));
 
-    const std::string ext = GetExtension(simfile_path).MakeLower();
+    std::string ext = GetExtension(simfile_path);
+    MakeLower(ext);
     bool ok = false;
     if (ext == "ssc" || ext == "ats") {
         SSCLoader loader;

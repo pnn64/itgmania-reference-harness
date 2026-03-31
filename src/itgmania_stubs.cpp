@@ -63,6 +63,8 @@ extern "C" {
 #include <ctime>
 #include <cstdlib>
 
+using RString = std::string;
+
 // ---------------------------------------------------------------------------
 // Globals
 static RageLog gLog;
@@ -88,8 +90,7 @@ SongManager* SONGMAN = &gSongManager;
 // CrashHandler stubs (no-op in harness)
 namespace CrashHandler {
 void ForceCrash(char const*) {}
-void ForceDeadlock(StdString::CStdStr<char>, uint64_t) {}
-void ForceDeadlock(StdString::CStdStr<char> const&, uint64_t) {}
+void ForceDeadlock(std::string, uint64_t) {}
 } // namespace CrashHandler
 
 // ---------------------------------------------------------------------------
@@ -152,7 +153,7 @@ const RString& DifficultyToString(Difficulty d) {
 }
 static Difficulty DifficultyFromString(const RString& in) {
 	RString s(in);
-	s.MakeLower();
+	MakeLower(s);
 	if (s == "beginner") return Difficulty_Beginner;
 	if (s == "easy") return Difficulty_Easy;
 	if (s == "medium") return Difficulty_Medium;
@@ -163,7 +164,7 @@ static Difficulty DifficultyFromString(const RString& in) {
 }
 static Difficulty OldStyleDifficultyFromString(const RString& in) {
 	RString s(in);
-	s.MakeLower();
+	MakeLower(s);
 	if (s == "beginner") return Difficulty_Beginner;
 	if (s == "easy" || s == "basic" || s == "light") return Difficulty_Easy;
 	if (s == "medium" || s == "another" || s == "trick" || s == "standard" || s == "difficult") return Difficulty_Medium;
@@ -640,8 +641,8 @@ namespace RageFileManagerUtil {
 RString sDirOfExecutable;
 }
 
-bool ilt(const RString& a, const RString& b) { return a.CompareNoCase(b) < 0; }
-bool ieq(const RString& a, const RString& b) { return a.CompareNoCase(b) == 0; }
+bool ilt(const RString& a, const RString& b) { return CompareNoCase(a, b) < 0; }
+bool ieq(const RString& a, const RString& b) { return CompareNoCase(a, b) == 0; }
 
 // ---------------------------------------------------------------------------
 // Preference/IPreference stubs (avoid full Preference.cpp dependency)
@@ -822,8 +823,8 @@ const StepsTypeInfo& GameManager::GetStepsTypeInfo(StepsType st) {
 	return infos[sti];
 }
 StepsType GameManager::StringToStepsType(RString s) {
-	s.MakeLower();
-	s.Replace('_', '-');
+	MakeLower(s);
+	Replace(s, '_', '-');
 	const int num_steps_types = static_cast<int>(NUM_StepsType);
 	for (int i = 0; i < num_steps_types; ++i) {
 		if (GetStepsTypeInfo(static_cast<StepsType>(i)).szName == s) return static_cast<StepsType>(i);
@@ -1073,7 +1074,7 @@ void XNodeStringValue::GetValue(float& out) const {
 }
 void XNodeStringValue::GetValue(bool& out) const {
 	RString lower = m_sValue;
-	lower.MakeLower();
+	MakeLower(lower);
 	out = (lower == "1" || lower == "true" || lower == "yes" || lower == "on");
 }
 void XNodeStringValue::GetValue(unsigned& out) const {
@@ -1218,7 +1219,7 @@ template<> bool FromString<float>(const RString& sValue, float& out) {
 }
 template<> bool FromString<bool>(const RString& sValue, bool& out) {
 	RString lower = sValue;
-	lower.MakeLower();
+	MakeLower(lower);
 	if (lower == "1" || lower == "true" || lower == "yes" || lower == "on") { out = true; return true; }
 	if (lower == "0" || lower == "false" || lower == "no" || lower == "off") { out = false; return true; }
 	return false;

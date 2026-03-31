@@ -55,12 +55,15 @@ extern "C" {
 #include "RageLog.h"
 #include "RageUtil.h"
 #include "Song.h"
+#include "StdString.h"
 #include "Steps.h"
 #include "Style.h"
 #include "StepParityGenerator.h"
 #include "TechCounts.h"
 #include "ThemeManager.h"
 #include "TimingData.h"
+
+using RString = std::string;
 
 static void init_singletons(int argc, char** argv) {
     static bool initialized = false;
@@ -473,7 +476,7 @@ static void get_bpm_ranges_like_simply_love(
 
 static bool load_song(const std::string& simfile_path, Song& song) {
     RString ext = GetExtension(simfile_path);
-    ext.MakeLower();
+    MakeLower(ext);
     if (ext == "ssc" || ext == "ats") {
         SSCLoader loader;
         return loader.LoadFromSimfile(simfile_path, song, false);
@@ -495,7 +498,7 @@ static std::string raw_bpms_from_msd(const std::string& simfile_path,
     }
 
     RString ext = GetExtension(simfile_path);
-    ext.MakeLower();
+    MakeLower(ext);
 
     auto normalize_steps = [&](const RString& value) -> std::string {
         RString out = value;
@@ -518,7 +521,7 @@ static std::string raw_bpms_from_msd(const std::string& simfile_path,
         for (unsigned i = 0; i < values; ++i) {
             const MsdFile::value_t& params = msd.GetValue(i);
             RString tag = params[0];
-            tag.MakeUpper();
+            MakeUpper(tag);
             if (tag == "BPMS") {
                 return params[1];
             }
@@ -537,7 +540,7 @@ static std::string raw_bpms_from_msd(const std::string& simfile_path,
     for (unsigned i = 0; i < values; ++i) {
         const MsdFile::value_t& params = msd.GetValue(i);
         RString tag = params[0];
-        tag.MakeUpper();
+        MakeUpper(tag);
 
         if (!in_steps) {
             if (tag == "BPMS") {
