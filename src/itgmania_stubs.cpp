@@ -71,6 +71,7 @@ using RString = std::string;
 // Globals
 static RageLog gLog;
 static GameState gGameState;
+static LuaManager gLuaManager;
 static GameManager gGameManager;
 static ThemeManager gThemeManager;
 static RageFileManager gFileManager("");
@@ -84,7 +85,7 @@ PrefsManager* PREFSMAN = nullptr;
 ThemeManager* THEME = &gThemeManager;
 RageFileManager* FILEMAN = &gFileManager;
 MessageManager* MESSAGEMAN = &gMessageManager;
-LuaManager* LUA = nullptr;
+LuaManager* LUA = &gLuaManager;
 SongManager* SONGMAN = &gSongManager;
 ProfileManager* PROFILEMAN = nullptr;
 // ScreenMessage constants provided by real ScreenMessage.cpp now.
@@ -317,17 +318,39 @@ void IPreference::SetFromStack(lua_State*) {}
 void IPreference::PushValue(lua_State*) const {}
 
 // Minimal LuaManager / LuaReference scaffolding for Lua registration macros.
-LuaManager::LuaManager() : m_pLuaMain(nullptr) {}
-LuaManager::~LuaManager() = default;
+LuaManager::LuaManager() : m_pLuaMain(luaL_newstate()) {}
+LuaManager::~LuaManager() {
+	if (m_pLuaMain) {
+		lua_close(m_pLuaMain);
+		m_pLuaMain = nullptr;
+	}
+}
 void LuaManager::Register(RegisterWithLuaFn) {}
-Lua* LuaManager::Get() { return nullptr; }
-void LuaManager::Release(Lua*& p) { p = nullptr; }
+Lua* LuaManager::Get() {
+	if (!m_pLuaMain) {
+		m_pLuaMain = luaL_newstate();
+	}
+	return m_pLuaMain;
+}
+void LuaManager::Release(Lua*& p) { p = m_pLuaMain; }
 void LuaManager::YieldLua() {}
 void LuaManager::UnyieldLua() {}
 void LuaManager::RegisterTypes() {}
-void LuaManager::SetGlobal(const RString&, int) {}
-void LuaManager::SetGlobal(const RString&, const RString&) {}
-void LuaManager::UnsetGlobal(const RString&) {}
+void LuaManager::SetGlobal(const RString& name, int value) {
+	if (!m_pLuaMain) return;
+	lua_pushinteger(m_pLuaMain, value);
+	lua_setglobal(m_pLuaMain, name.c_str());
+}
+void LuaManager::SetGlobal(const RString& name, const RString& value) {
+	if (!m_pLuaMain) return;
+	lua_pushlstring(m_pLuaMain, value.data(), value.size());
+	lua_setglobal(m_pLuaMain, name.c_str());
+}
+void LuaManager::UnsetGlobal(const RString& name) {
+	if (!m_pLuaMain) return;
+	lua_pushnil(m_pLuaMain);
+	lua_setglobal(m_pLuaMain, name.c_str());
+}
 
 LuaReference::LuaReference() : m_iReference(LUA_NOREF) {}
 LuaReference::~LuaReference() = default;
@@ -337,10 +360,13 @@ void LuaReference::SetFromStack(Lua*) { m_iReference = LUA_NOREF; }
 void LuaReference::SetFromNil() { m_iReference = LUA_REFNIL; }
 bool LuaReference::SetFromExpression(const RString&) { m_iReference = LUA_NOREF; return true; }
 void LuaReference::DeepCopy() {}
-void LuaReference::PushSelf(lua_State* L) const { lua_pushnil(L); }
+void LuaReference::PushSelf(lua_State* L) const {
+	if (!L) return;
+	lua_pushnil(L);
+}
 bool LuaReference::IsSet() const { return m_iReference != LUA_NOREF; }
 bool LuaReference::IsNil() const { return m_iReference == LUA_REFNIL; }
-int LuaReference::GetLuaType() const { return LUA_TNIL; }
+int LuaReference::GetLuaType() const { return IsSet() ? LUA_TNIL : LUA_TNONE; }
 RString LuaReference::Serialize() const { return ""; }
 void LuaReference::Unregister() { m_iReference = LUA_NOREF; }
 LuaTable::LuaTable() : LuaReference() {}
@@ -946,9 +972,18 @@ RageTexturePreloader& RageTexturePreloader::operator=(const RageTexturePreloader
 void RageTexturePreloader::Load(const RageTextureID&) {}
 void RageTexturePreloader::UnloadAll() {}
 
-ThemeManager::ThemeManager() = default;
+namespace {
+std::vector<IThemeMetric*>& harness_theme_metrics() {
+	static std::vector<IThemeMetric*> metrics;
+	return metrics;
+}
+}
+ThemeManager::ThemeManager() : m_sCurThemeName("Harness"), m_sCurLanguage("en"), m_bPseudoLocalize(false) {
+	for (IThemeMetric* metric : harness_theme_metrics()) {
+		if (metric) metric->Read();
+	}
+}
 ThemeManager::~ThemeManager() = default;
-// ... (UNCHANGED from your paste: all the ThemeManager methods you included)
 bool ThemeManager::DoesThemeExist(const RString&) { return false; }
 void ThemeManager::GetThemeNames(std::vector<RString>&) {}
 void ThemeManager::GetSelectableThemeNames(std::vector<RString>&) {}
@@ -971,8 +1006,20 @@ bool ThemeManager::GetPathInfo(PathInfo&, ElementCategory, const RString&, const
 RString ThemeManager::GetPath(ElementCategory, const RString&, const RString&, bool) { return ""; }
 void ThemeManager::ClearThemePathCache() {}
 bool ThemeManager::HasMetric(const RString&, const RString&) { return false; }
-void ThemeManager::Subscribe(IThemeMetric*) {}
-void ThemeManager::Unsubscribe(IThemeMetric*) {}
+void ThemeManager::Subscribe(IThemeMetric* metric) {
+	if (!metric) return;
+	auto& metrics = harness_theme_metrics();
+	if (std::find(metrics.begin(), metrics.end(), metric) == metrics.end()) {
+		metrics.push_back(metric);
+	}
+	if (THEME && !THEME->GetCurThemeName().empty()) {
+		metric->Read();
+	}
+}
+void ThemeManager::Unsubscribe(IThemeMetric* metric) {
+	auto& metrics = harness_theme_metrics();
+	metrics.erase(std::remove(metrics.begin(), metrics.end(), metric), metrics.end());
+}
 void ThemeManager::PushMetric(Lua*, const RString&, const RString&) {}
 RString ThemeManager::GetMetric(const RString&, const RString&) { return ""; }
 int ThemeManager::GetMetricI(const RString&, const RString&) { return 0; }
@@ -980,7 +1027,7 @@ float ThemeManager::GetMetricF(const RString&, const RString&) { return 0.0f; }
 bool ThemeManager::GetMetricB(const RString&, const RString&) { return false; }
 RageColor ThemeManager::GetMetricC(const RString&, const RString&) { return RageColor(); }
 LuaReference ThemeManager::GetMetricR(const RString&, const RString&) { return LuaReference(); }
-void ThemeManager::GetMetric(const RString&, const RString&, LuaReference&) {}
+void ThemeManager::GetMetric(const RString&, const RString&, LuaReference& out) { out.SetFromNil(); }
 bool ThemeManager::HasString(const RString&, const RString&) { return false; }
 RString ThemeManager::GetString(const RString&, const RString&) { return ""; }
 void ThemeManager::FilterFileLanguages(std::vector<RString>&) {}
