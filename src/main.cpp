@@ -130,7 +130,7 @@ static std::string json_escape(std::string_view s) {
 }
 
 template <typename T, typename EmitOneFn>
-static void emit_inline_array(std::ostream& out, const std::vector<T>& values, const EmitOneFn& emit_one) {
+static void emit_inline_array(std::ostream& out, const std::vector<T>& values, EmitOneFn emit_one) {
     out << "[";
     for (size_t i = 0; i < values.size(); ++i) {
         if (i) out << ", ";
