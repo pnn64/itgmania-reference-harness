@@ -2,6 +2,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <cmath>
 #include <iomanip>
 
 #include "itgmania_adapter.h"
@@ -138,15 +139,60 @@ static void emit_inline_array(std::ostream& out, const std::vector<T>& values, c
     out << "]";
 }
 
-static void emit_number_table(std::ostream& out, const std::vector<std::vector<double>>& table) {
-    emit_inline_array(out, table, [](std::ostream& out, const std::vector<double>& row) {
-        emit_inline_array(out, row, [](std::ostream& out, double v) { out << v; });
-    });
+static void emit_fixed_6(std::ostream& out, double v) {
+    const std::ios::fmtflags old_flags = out.flags();
+    const std::streamsize old_precision = out.precision();
+    out << std::fixed << std::setprecision(6) << v;
+    out.flags(old_flags);
+    out.precision(old_precision);
+}
+
+static void emit_int_like(std::ostream& out, double v) {
+    out << static_cast<long long>(std::llround(v));
+}
+
+static void emit_number_table(std::ostream& out,
+                              const std::vector<std::vector<double>>& table,
+                              std::string_view format) {
+    const auto emit_row = [format](std::ostream& out, const std::vector<double>& row) {
+        emit_inline_array(out, row, [format, idx = size_t{0}](std::ostream& out, double v) mutable {
+            const char kind = idx < format.size() ? format[idx] : 'f';
+            ++idx;
+            if (kind == 'i') {
+                emit_int_like(out, v);
+            } else {
+                emit_fixed_6(out, v);
+            }
+        });
+    };
+    emit_inline_array(out, table, emit_row);
+}
+
+static void emit_float_table(std::ostream& out, const std::vector<std::vector<double>>& table) {
+    emit_number_table(out, table, "ff");
+}
+
+static void emit_time_signature_table(std::ostream& out, const std::vector<std::vector<double>>& table) {
+    emit_number_table(out, table, "fii");
+}
+
+static void emit_tickcount_table(std::ostream& out, const std::vector<std::vector<double>>& table) {
+    emit_number_table(out, table, "fi");
+}
+
+static void emit_combo_table(std::ostream& out, const std::vector<std::vector<double>>& table) {
+    emit_number_table(out, table, "fii");
+}
+
+static void emit_speed_table(std::ostream& out, const std::vector<std::vector<double>>& table) {
+    emit_number_table(out, table, "fffi");
 }
 
 static void emit_labels_table(std::ostream& out, const std::vector<TimingLabelOut>& labels) {
     emit_inline_array(out, labels, [](std::ostream& out, const TimingLabelOut& label) {
-        out << "[" << label.beat << ", \"" << json_escape(label.label) << "\"]";
+        out << "[";
+        emit_fixed_6(out, label.beat);
+        out << ", \"" << json_escape(label.label) << "\"]";
     });
 }
 
@@ -329,40 +375,44 @@ static void emit_chart_json_timing(
     const std::string& ind2,
     bool trailing_comma) {
     out << ind2 << "\"timing\": {\n";
-    out << ind2 << "  \"beat0_offset_seconds\": " << m.beat0_offset_seconds << ",\n";
-    out << ind2 << "  \"beat0_group_offset_seconds\": " << m.beat0_group_offset_seconds << ",\n";
+    out << ind2 << "  \"beat0_offset_seconds\": ";
+    emit_fixed_6(out, m.beat0_offset_seconds);
+    out << ",\n";
+    out << ind2 << "  \"beat0_group_offset_seconds\": ";
+    emit_fixed_6(out, m.beat0_group_offset_seconds);
+    out << ",\n";
     out << ind2 << "  \"bpms\": ";
-    emit_number_table(out, m.timing_bpms);
+    emit_float_table(out, m.timing_bpms);
     out << ",\n";
     out << ind2 << "  \"stops\": ";
-    emit_number_table(out, m.timing_stops);
+    emit_float_table(out, m.timing_stops);
     out << ",\n";
     out << ind2 << "  \"delays\": ";
-    emit_number_table(out, m.timing_delays);
+    emit_float_table(out, m.timing_delays);
     out << ",\n";
     out << ind2 << "  \"time_signatures\": ";
-    emit_number_table(out, m.timing_time_signatures);
+    emit_time_signature_table(out, m.timing_time_signatures);
     out << ",\n";
     out << ind2 << "  \"warps\": ";
-    emit_number_table(out, m.timing_warps);
+    emit_float_table(out, m.timing_warps);
     out << ",\n";
     out << ind2 << "  \"labels\": ";
     emit_labels_table(out, m.timing_labels);
     out << ",\n";
     out << ind2 << "  \"tickcounts\": ";
-    emit_number_table(out, m.timing_tickcounts);
+    emit_tickcount_table(out, m.timing_tickcounts);
     out << ",\n";
     out << ind2 << "  \"combos\": ";
-    emit_number_table(out, m.timing_combos);
+    emit_combo_table(out, m.timing_combos);
     out << ",\n";
     out << ind2 << "  \"speeds\": ";
-    emit_number_table(out, m.timing_speeds);
+    emit_speed_table(out, m.timing_speeds);
     out << ",\n";
     out << ind2 << "  \"scrolls\": ";
-    emit_number_table(out, m.timing_scrolls);
+    emit_float_table(out, m.timing_scrolls);
     out << ",\n";
     out << ind2 << "  \"fakes\": ";
-    emit_number_table(out, m.timing_fakes);
+    emit_float_table(out, m.timing_fakes);
     out << "\n";
     out << ind2 << "}";
     if (trailing_comma) {
