@@ -7,7 +7,7 @@
 
 #include "itgmania_adapter.h"
 
-static constexpr std::string_view kVersion = "0.1.19";
+static constexpr std::string_view kVersion = "0.1.29";
 
 static bool is_valid_utf8(std::string_view s) {
     size_t i = 0;
